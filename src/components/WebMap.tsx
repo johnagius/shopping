@@ -176,6 +176,20 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
     showToast("Web reset");
   };
 
+  const editShort = async (e: React.MouseEvent, it: CatalogItem) => {
+    e.stopPropagation();
+    const v = window.prompt(`Short / generic name for "${it.name}"`, it.short_name ?? "");
+    if (v === null) return;
+    const val = v.trim();
+    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, short_name: val || null } : x)));
+    try {
+      await api.updateCatalogItem(it.id, { short_name: val });
+      showToast(val ? "Short name saved" : "Short name cleared");
+    } catch (err) {
+      showToast((err as Error).message);
+    }
+  };
+
   const layout = useMemo(() => {
     const { w, h } = size;
     const groups = new Map<string, CatalogItem[]>();
@@ -312,7 +326,7 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
           <span className="muted" style={{ fontSize: 12 }}>
             {mode === "collapsed"
               ? "Tap a category to open it."
-              : "Tap an item to copy + mark it. Tap the category (bottom-left) to go back."}
+              : "Tap an item to copy + mark it · ✎ sets a short name · tap the category (bottom-left) to go back."}
           </span>
           <div className="spacer" />
           {marked.size > 0 && (
@@ -394,6 +408,25 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
                           </tspan>
                         ))}
                       </text>
+                      {/* edit short-name badge (top-right of the pill) */}
+                      <g onClick={(e) => editShort(e, nd.item)} style={{ cursor: "pointer" }}>
+                        <circle
+                          cx={nd.x + nd.w / 2 - font * 0.8}
+                          cy={nd.y - nd.h / 2 + font * 0.8}
+                          r={font * 0.78}
+                          fill="var(--surface)"
+                          stroke={on ? "var(--accent)" : "var(--border)"}
+                        />
+                        <text
+                          x={nd.x + nd.w / 2 - font * 0.8}
+                          y={nd.y - nd.h / 2 + font * 0.8 + font * 0.3}
+                          textAnchor="middle"
+                          fontSize={font * 0.72}
+                          fill="var(--muted)"
+                        >
+                          ✎
+                        </text>
+                      </g>
                     </g>
                   );
                 })}
