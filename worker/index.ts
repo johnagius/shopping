@@ -162,9 +162,64 @@ api.get("/catalog", async (c) => {
     return c.json(results);
   }
   const { results } = await c.env.DB.prepare(
-    "SELECT * FROM catalog_items ORDER BY order_count DESC, last_ordered_at DESC LIMIT 200",
+    "SELECT * FROM catalog_items ORDER BY order_count DESC, last_ordered_at DESC LIMIT 500",
   ).all();
   return c.json(results);
+});
+
+api.patch("/catalog/:id", async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param("id"));
+  const body = await c.req.json<{ name?: string; category?: string; last_price?: number | null }>();
+
+  const existing = await db
+    .prepare("SELECT norm_name FROM catalog_items WHERE id = ?")
+    .bind(id)
+    .first<{ norm_name: string }>();
+  if (!existing) return c.json({ error: "not found" }, 404);
+
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  let newNorm: string | null = null;
+  if (body.name !== undefined && body.name.trim()) {
+    newNorm = normalizeName(body.name);
+    sets.push("name = ?", "norm_name = ?");
+    vals.push(body.name.trim(), newNorm);
+  }
+  if (body.category !== undefined) {
+    sets.push("category = ?");
+    vals.push(body.category);
+  }
+  if (body.last_price !== undefined) {
+    sets.push("last_price = ?");
+    vals.push(body.last_price);
+  }
+  if (sets.length === 0) return c.json({ ok: true });
+  sets.push("updated_at = datetime('now')");
+  vals.push(id);
+  try {
+    await db.prepare(`UPDATE catalog_items SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+  } catch (e) {
+    return c.json({ error: `Couldn't update (maybe a duplicate name): ${(e as Error).message}` }, 400);
+  }
+
+  // A rename changes norm_name, which is the key linking the catalog to order
+  // history and the list. Cascade it so nothing gets orphaned.
+  if (newNorm && newNorm !== existing.norm_name) {
+    await db.prepare("UPDATE order_items SET norm_name = ? WHERE norm_name = ?")
+      .bind(newNorm, existing.norm_name)
+      .run();
+    await db.prepare("UPDATE shopping_list SET norm_name = ? WHERE norm_name = ?")
+      .bind(newNorm, existing.norm_name)
+      .run();
+  }
+  return c.json({ ok: true });
+});
+
+api.delete("/catalog/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  await c.env.DB.prepare("DELETE FROM catalog_items WHERE id = ?").bind(id).run();
+  return c.json({ ok: true });
 });
 
 // ---- Orders ----
@@ -188,6 +243,46 @@ api.get("/orders/:id", async (c) => {
     .bind(id)
     .all();
   return c.json({ ...order, items });
+});
+
+api.delete("/orders/:id", async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param("id"));
+
+  // Which catalog items are affected, so we can refresh their stats after.
+  const { results: norms } = await db
+    .prepare("SELECT DISTINCT norm_name FROM order_items WHERE order_id = ? AND is_fee = 0")
+    .bind(id)
+    .all<{ norm_name: string }>();
+
+  await db.prepare("DELETE FROM orders WHERE id = ?").bind(id).run(); // cascades to order_items
+
+  // Recompute order_count / last_* for each affected item from what remains.
+  for (const { norm_name } of norms) {
+    const stat = await db
+      .prepare(
+        `SELECT COUNT(DISTINCT oi.order_id) AS cnt FROM order_items oi WHERE oi.norm_name = ? AND oi.is_fee = 0`,
+      )
+      .bind(norm_name)
+      .first<{ cnt: number }>();
+    const latest = await db
+      .prepare(
+        `SELECT oi.unit_price AS price, o.shop_name AS shop, o.ordered_on AS on_date
+         FROM order_items oi JOIN orders o ON oi.order_id = o.id
+         WHERE oi.norm_name = ? AND oi.is_fee = 0
+         ORDER BY o.created_at DESC LIMIT 1`,
+      )
+      .bind(norm_name)
+      .first<{ price: number | null; shop: string | null; on_date: string | null }>();
+    await db
+      .prepare(
+        `UPDATE catalog_items SET order_count = ?, last_price = ?, last_shop = ?, last_ordered_at = ?,
+           updated_at = datetime('now') WHERE norm_name = ?`,
+      )
+      .bind(stat?.cnt ?? 0, latest?.price ?? null, latest?.shop ?? null, latest?.on_date ?? null, norm_name)
+      .run();
+  }
+  return c.json({ ok: true });
 });
 
 api.post("/orders/import", async (c) => {

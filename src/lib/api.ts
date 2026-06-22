@@ -45,13 +45,20 @@ export const api = {
       body: JSON.stringify({ items }),
     }),
 
-  // Catalog
+  // Catalog ("system inventory")
   getCatalog: (q?: string) =>
     req<CatalogItem[]>(`/catalog${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  updateCatalogItem: (
+    id: number,
+    patch: { name?: string; category?: string; last_price?: number | null },
+  ) => req<{ ok: true }>(`/catalog/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteCatalogItem: (id: number) =>
+    req<{ ok: true }>(`/catalog/${id}`, { method: "DELETE" }),
 
   // Orders
   getOrders: () => req<(Order & { item_count: number })[]>("/orders"),
   getOrder: (id: number) => req<Order>(`/orders/${id}`),
+  deleteOrder: (id: number) => req<{ ok: true }>(`/orders/${id}`, { method: "DELETE" }),
   importOrder: (order: ParsedOrder) =>
     req<{ id: number; items: number }>("/orders/import", {
       method: "POST",

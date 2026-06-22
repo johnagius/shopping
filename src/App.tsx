@@ -4,13 +4,15 @@ import { ImportReceipt } from "./components/ImportReceipt";
 import { OrderHistory } from "./components/OrderHistory";
 import { WhereToBuy } from "./components/WhereToBuy";
 import { Insights } from "./components/Insights";
+import { Inventory } from "./components/Inventory";
 
-type Tab = "list" | "import" | "history" | "shops" | "insights";
+type Tab = "list" | "import" | "history" | "shops" | "insights" | "inventory";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "list", label: "🛒 List" },
   { id: "import", label: "📥 Import" },
-  { id: "history", label: "🧾 History" },
+  { id: "history", label: "🧾 Orders" },
+  { id: "inventory", label: "📦 Inventory" },
   { id: "shops", label: "📍 Where to buy" },
   { id: "insights", label: "📊 Insights" },
 ];
@@ -88,6 +90,7 @@ export function App() {
           }}
         />
       )}
+      {tab === "inventory" && <Inventory key={`inv-${refreshKey}`} showToast={showToast} />}
       {tab === "shops" && <WhereToBuy key={`shops-${refreshKey}`} />}
       {tab === "insights" && <Insights key={`insights-${refreshKey}`} />}
 
