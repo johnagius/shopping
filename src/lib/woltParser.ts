@@ -48,6 +48,18 @@ function firstMatch(lines: string[], re: RegExp): string | null {
   return null;
 }
 
+/**
+ * Parse a Wolt date like "21/06/2026, 11:14" (DD/MM/YYYY) into an ISO date
+ * "2026-06-21". Returns null if it doesn't match.
+ */
+export function parseWoltDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const m = value.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  const [, d, mo, y] = m;
+  return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
 /** Last number that appears on a line, e.g. "Delivery 67 Triq ... 0.00" -> 0.00 */
 function trailingAmount(line: string): number | null {
   const m = line.replace(",", ".").match(/(\d+(?:\.\d{1,2})?)\s*$/);
@@ -68,6 +80,7 @@ export function parseWoltReceipt(raw: string): ParsedOrder {
     placedAt: firstMatch(allLines, /order placed:\s*(.+)/i),
     deliveredAt: firstMatch(allLines, /order delivered:\s*(.+)/i),
     deliveryAddress: firstMatch(allLines, /delivered to:\s*(.+)/i),
+    placedOn: null,
     items: [],
     subtotal: null,
     serviceFee: null,
@@ -78,18 +91,63 @@ export function parseWoltReceipt(raw: string): ParsedOrder {
     rawText: raw,
   };
 
+  order.placedOn = parseWoltDate(order.placedAt) ?? parseWoltDate(order.deliveredAt);
+
   // Shop address: the line after the shop name, unless it's already a known field.
   if (allLines[1] && !/^(\+|order|your|delivered|delivery)/i.test(allLines[1])) {
     order.shopAddress = allLines[1];
   }
 
-  // Items section starts after the first standalone "Items" line.
-  const itemsIdx = allLines.findIndex((l) => /^items$/i.test(l));
-  const start = itemsIdx >= 0 ? itemsIdx + 1 : 0;
+  // Wolt marks the item list differently depending on the order:
+  //   - "Items"
+  //   - "Included in the order" and/or "Not included in the order" — the latter
+  //     are items that were NOT delivered and NOT charged (out of stock, etc.).
+  // We start parsing at the first such header and track whether the current
+  // section is "not included" so those lines can be excluded from totals/import.
+  const SECTION = /^(items|included in the order|not included in the order)$/i;
+  const hasSection = allLines.some((l) => SECTION.test(l));
 
-  let i = start;
+  // Fallback for receipts with no section header: start after the last metadata
+  // line so we don't mistake the header for products.
+  let fallbackStart = -1;
+  if (!hasSection) {
+    allLines.forEach((l, idx) => {
+      if (
+        /^(\+|order placed|order id|order delivered|your order number|delivered to|delivery|delivered)/i.test(l)
+      )
+        fallbackStart = idx;
+    });
+  }
+
+  let inItems = false;
+  let notIncluded = false;
+  let i = 0;
   while (i < allLines.length) {
     const line = allLines[i];
+
+    if (/^items$/i.test(line)) {
+      inItems = true;
+      notIncluded = false;
+      i += 1;
+      continue;
+    }
+    if (/^not included in the order/i.test(line)) {
+      inItems = true;
+      notIncluded = true;
+      i += 1;
+      continue;
+    }
+    if (/^included in the order/i.test(line)) {
+      inItems = true;
+      notIncluded = false;
+      i += 1;
+      continue;
+    }
+    if (!inItems && fallbackStart >= 0 && i > fallbackStart) inItems = true;
+    if (!inItems) {
+      i += 1;
+      continue;
+    }
 
     if (/^total sum/i.test(line)) {
       // "Total sum" then "€91.75" on the next line (or amount on same line).
@@ -160,13 +218,14 @@ export function parseWoltReceipt(raw: string): ParsedOrder {
       lineTotal,
       substitutionFor,
       isFee,
+      notIncluded,
     };
     order.items.push(item);
   }
 
-  // Subtotal = sum of non-fee line totals (fallback to unit*qty).
+  // Subtotal = sum of delivered, non-fee line totals (fallback to unit*qty).
   const productTotals = order.items
-    .filter((it) => !it.isFee)
+    .filter((it) => !it.isFee && !it.notIncluded)
     .map((it) => it.lineTotal ?? (it.unitPrice != null ? it.unitPrice * it.quantity : 0));
   order.subtotal = productTotals.length
     ? Math.round(productTotals.reduce((a, b) => a + b, 0) * 100) / 100

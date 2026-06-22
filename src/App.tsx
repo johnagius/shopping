@@ -18,6 +18,8 @@ const TABS: { id: Tab; label: string }[] = [
 export function App() {
   const [tab, setTab] = useState<Tab>("list");
   const [toast, setToast] = useState<string | null>(null);
+  // Text handed to the Import tab when a receipt is pasted somewhere else.
+  const [importSeed, setImportSeed] = useState("");
   // Bumped to tell the list/finder to refetch after an import or reorder.
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -33,6 +35,12 @@ export function App() {
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
   const goToList = useCallback(() => setTab("list"), []);
+
+  // Called when a Wolt receipt is pasted into the wrong place (e.g. the add box).
+  const startImport = useCallback((text: string) => {
+    setImportSeed(text);
+    setTab("import");
+  }, []);
 
   return (
     <div className="app">
@@ -54,12 +62,18 @@ export function App() {
       </nav>
 
       {tab === "list" && (
-        <ShoppingList key={`list-${refreshKey}`} showToast={showToast} />
+        <ShoppingList
+          key={`list-${refreshKey}`}
+          showToast={showToast}
+          onPasteReceipt={startImport}
+        />
       )}
       {tab === "import" && (
         <ImportReceipt
           showToast={showToast}
+          initialText={importSeed}
           onImported={() => {
+            setImportSeed("");
             refresh();
             setTab("history");
           }}

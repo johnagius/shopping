@@ -3,6 +3,7 @@ import type {
   Insights,
   Order,
   ParsedOrder,
+  RestockItem,
   ShoppingListItem,
   WhereToBuyResponse,
 } from "./types";
@@ -29,7 +30,7 @@ export const api = {
     }),
   updateListItem: (
     id: number,
-    patch: { quantity?: number; checked?: boolean; note?: string },
+    patch: { quantity?: number; checked?: boolean; note?: string; category?: string },
   ) => req<{ ok: true }>(`/list/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteListItem: (id: number) => req<{ ok: true }>(`/list/${id}`, { method: "DELETE" }),
   clearChecked: () => req<{ deleted: number }>("/list/clear-checked", { method: "POST" }),
@@ -62,6 +63,9 @@ export const api = {
 
   // Suggestions ("you usually buy these")
   getSuggestions: () => req<CatalogItem[]>("/suggestions"),
+
+  // Restock predictions ("due to buy again")
+  getRestock: () => req<RestockItem[]>("/restock"),
 
   // Spending insights
   getInsights: () => req<Insights>("/insights"),

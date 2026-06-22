@@ -1,21 +1,45 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../lib/api";
-import { aisleOrder } from "../lib/categorize";
-import type { CatalogItem, ShoppingListItem } from "../lib/types";
+import { AISLES, aisleOrder } from "../lib/categorize";
+import { parseWoltReceipt } from "../lib/woltParser";
+import type { CatalogItem, RestockItem, ShoppingListItem } from "../lib/types";
 
-export function ShoppingList({ showToast }: { showToast: (m: string) => void }) {
+/** Does pasted text look like a Wolt receipt rather than a plain item name? */
+function looksLikeReceipt(text: string): boolean {
+  if (!/\n/.test(text)) return false;
+  if (/total sum/i.test(text) || /order id/i.test(text) || /included in the order/i.test(text)) {
+    return true;
+  }
+  const products = parseWoltReceipt(text).items.filter((i) => !i.isFee);
+  return products.length >= 2;
+}
+
+export function ShoppingList({
+  showToast,
+  onPasteReceipt,
+}: {
+  showToast: (m: string) => void;
+  onPasteReceipt: (text: string) => void;
+}) {
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [suggestions, setSuggestions] = useState<CatalogItem[]>([]);
   const [usual, setUsual] = useState<CatalogItem[]>([]);
+  const [restock, setRestock] = useState<RestockItem[]>([]);
+  const [editing, setEditing] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, sugg] = await Promise.all([api.getList(), api.getSuggestions()]);
+      const [list, sugg, due] = await Promise.all([
+        api.getList(),
+        api.getSuggestions(),
+        api.getRestock(),
+      ]);
       setItems(list);
       setUsual(sugg);
+      setRestock(due);
     } finally {
       setLoading(false);
     }
@@ -53,6 +77,45 @@ export function ShoppingList({ showToast }: { showToast: (m: string) => void }) 
     setName("");
     setSuggestions([]);
     await api.addToList(v);
+    await load();
+  };
+
+  // Pasting into the add box: if it's a receipt, send it to Import; if it's
+  // several lines, add each as its own item; otherwise behave normally.
+  const onPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (!text || !/\n/.test(text)) return; // single line: default behaviour
+    e.preventDefault();
+    if (looksLikeReceipt(text)) {
+      showToast("Looks like a receipt — opening Import");
+      onPasteReceipt(text);
+      setName("");
+      return;
+    }
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    void (async () => {
+      await api.addItemsToList(lines.map((name) => ({ name })));
+      showToast(`Added ${lines.length} items`);
+      setName("");
+      await load();
+    })();
+  };
+
+  const setCategory = async (it: ShoppingListItem, category: string) => {
+    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, category } : x)));
+    setEditing(null);
+    await api.updateListItem(it.id, { category });
+    await load();
+  };
+
+  const addAllDue = async () => {
+    const due = restock.filter((r) => r.status === "due");
+    if (due.length === 0) return;
+    await api.addItemsToList(due.map((r) => ({ name: r.name })));
+    showToast(`Added ${due.length} restock item${due.length === 1 ? "" : "s"}`);
     await load();
   };
 
@@ -113,6 +176,31 @@ export function ShoppingList({ showToast }: { showToast: (m: string) => void }) 
           {it.last_shop ? ` · last from ${it.last_shop}` : ""}
           {it.note ? ` · ${it.note}` : ""}
         </div>
+        {!it.checked &&
+          (editing === it.id ? (
+            <select
+              autoFocus
+              value={it.category ?? "Other"}
+              onChange={(e) => setCategory(it, e.target.value)}
+              onBlur={() => setEditing(null)}
+              style={{ marginTop: 4, width: "auto", padding: "4px 6px", fontSize: 12 }}
+            >
+              {AISLES.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <button
+              className="tag"
+              style={{ cursor: "pointer", marginTop: 4 }}
+              onClick={() => setEditing(it.id)}
+              title="Change aisle"
+            >
+              {it.category ?? "Other"} ▾
+            </button>
+          ))}
       </div>
       <div className="spacer" />
       <div className="qty">
@@ -131,10 +219,11 @@ export function ShoppingList({ showToast }: { showToast: (m: string) => void }) 
       <div className="card">
         <div className="row">
           <input
-            placeholder="Add an item… (e.g. Milk 1L)"
+            placeholder="Add an item, or paste a receipt…"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && add(name)}
+            onPaste={onPaste}
             autoComplete="off"
           />
           <button className="btn" onClick={() => add(name)}>
@@ -152,6 +241,47 @@ export function ShoppingList({ showToast }: { showToast: (m: string) => void }) 
           </div>
         )}
       </div>
+
+      {restock.some((r) => r.status === "due" || r.status === "soon") && (
+        <div className="card">
+          <div className="row">
+            <h2 className="section" style={{ margin: 0 }}>
+              Due to buy again
+            </h2>
+            <div className="spacer" />
+            {restock.some((r) => r.status === "due") && (
+              <button className="btn secondary" onClick={addAllDue}>
+                Add all due
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {restock
+              .filter((r) => r.status === "due" || r.status === "soon")
+              .slice(0, 12)
+              .map((r) => (
+                <button
+                  key={r.norm_name}
+                  className={`tag ${r.status === "due" ? "warn" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => add(r.name)}
+                  title={
+                    r.avgIntervalDays
+                      ? `Bought ~every ${r.avgIntervalDays}d · last ${r.daysSinceLast}d ago`
+                      : undefined
+                  }
+                >
+                  + {r.name}
+                  {r.status === "due"
+                    ? " · due"
+                    : r.dueInDays != null
+                      ? ` · ~${r.dueInDays}d`
+                      : ""}
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
 
       {usual.length > 0 && (
         <div className="card">

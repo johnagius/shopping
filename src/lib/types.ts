@@ -35,6 +35,7 @@ export interface Order {
   order_number: string | null;
   wolt_order_id: string | null;
   placed_at: string | null;
+  ordered_on: string | null;
   delivered_at: string | null;
   delivery_address: string | null;
   subtotal: number | null;
@@ -70,6 +71,7 @@ export interface ParsedLineItem {
   lineTotal: number | null;
   substitutionFor?: string | null;
   isFee?: boolean;
+  notIncluded?: boolean; // ordered but not delivered / not charged
 }
 
 export interface ParsedOrder {
@@ -78,6 +80,7 @@ export interface ParsedOrder {
   orderNumber: string | null;
   woltOrderId: string | null;
   placedAt: string | null;
+  placedOn: string | null; // ISO date (YYYY-MM-DD) parsed from placedAt
   deliveredAt: string | null;
   deliveryAddress: string | null;
   items: ParsedLineItem[];
@@ -103,6 +106,21 @@ export interface WhereToBuyShop {
 export interface WhereToBuyResponse {
   queriedItems: string[];
   shops: WhereToBuyShop[];
+}
+
+// ---- Restock predictions ----
+
+export interface RestockItem {
+  name: string;
+  norm_name: string;
+  category: string | null;
+  last_price: number | null;
+  last_shop: string | null;
+  timesOrdered: number;
+  avgIntervalDays: number | null;
+  daysSinceLast: number;
+  dueInDays: number | null;
+  status: "due" | "soon" | "ok";
 }
 
 // ---- Spending insights ----

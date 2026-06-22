@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { parseWoltReceipt } from "../lib/woltParser";
 import type { ParsedOrder } from "../lib/types";
@@ -21,12 +21,19 @@ Total sum
 export function ImportReceipt({
   showToast,
   onImported,
+  initialText = "",
 }: {
   showToast: (m: string) => void;
   onImported: () => void;
+  initialText?: string;
 }) {
-  const [raw, setRaw] = useState("");
+  const [raw, setRaw] = useState(initialText);
   const [saving, setSaving] = useState(false);
+
+  // When a receipt is pasted elsewhere and routed here, seed the textarea.
+  useEffect(() => {
+    if (initialText) setRaw(initialText);
+  }, [initialText]);
 
   const parsed: ParsedOrder | null = useMemo(() => {
     if (!raw.trim()) return null;
@@ -37,7 +44,8 @@ export function ImportReceipt({
     }
   }, [raw]);
 
-  const products = parsed?.items.filter((i) => !i.isFee) ?? [];
+  const products = parsed?.items.filter((i) => !i.isFee && !i.notIncluded) ?? [];
+  const notIncluded = parsed?.items.filter((i) => i.notIncluded) ?? [];
 
   const save = async () => {
     if (!parsed) return;
@@ -63,7 +71,8 @@ export function ImportReceipt({
         <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
           Open your order in Wolt, select &amp; copy the receipt text, and paste it
           here. The app figures out items, quantities, prices, substitutions and the
-          shop — then adds everything to your order history &amp; catalog.
+          shop — then adds everything to your order history &amp; catalog. Items that
+          weren't delivered are detected and left out.
         </p>
         <textarea
           placeholder="Paste the copied Wolt order text here…"
@@ -117,6 +126,24 @@ export function ImportReceipt({
               </div>
             ))}
           </div>
+
+          {notIncluded.length > 0 && (
+            <>
+              <h2 className="section">Not delivered (not charged)</h2>
+              {notIncluded.map((it, idx) => (
+                <div key={idx} className="list-item" style={{ opacity: 0.55 }}>
+                  <div className="name" style={{ textDecoration: "line-through" }}>
+                    {it.quantity > 1 ? `${it.quantity}× ` : ""}
+                    {it.name}
+                  </div>
+                  <div className="spacer" />
+                  <span className="muted">
+                    {it.lineTotal != null ? `€${it.lineTotal.toFixed(2)}` : "—"}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
 
           <div className="row" style={{ marginTop: 8 }}>
             <span className="muted" style={{ fontSize: 13 }}>

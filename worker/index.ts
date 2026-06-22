@@ -71,7 +71,12 @@ api.post("/list", async (c) => {
 
 api.patch("/list/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  const body = await c.req.json<{ quantity?: number; checked?: boolean; note?: string }>();
+  const body = await c.req.json<{
+    quantity?: number;
+    checked?: boolean;
+    note?: string;
+    category?: string;
+  }>();
   const sets: string[] = [];
   const vals: unknown[] = [];
   if (body.quantity !== undefined) {
@@ -86,11 +91,25 @@ api.patch("/list/:id", async (c) => {
     sets.push("note = ?");
     vals.push(body.note);
   }
+  if (body.category !== undefined) {
+    sets.push("category = ?");
+    vals.push(body.category);
+  }
   if (sets.length === 0) return c.json({ ok: true });
   vals.push(id);
   await c.env.DB.prepare(`UPDATE shopping_list SET ${sets.join(", ")} WHERE id = ?`)
     .bind(...vals)
     .run();
+
+  // A category correction should stick for next time: update the catalog too.
+  if (body.category !== undefined) {
+    await c.env.DB.prepare(
+      `UPDATE catalog_items SET category = ?, updated_at = datetime('now')
+       WHERE norm_name = (SELECT norm_name FROM shopping_list WHERE id = ?)`,
+    )
+      .bind(body.category, id)
+      .run();
+  }
   return c.json({ ok: true });
 });
 
@@ -178,9 +197,9 @@ api.post("/orders/import", async (c) => {
   const orderRes = await db
     .prepare(
       `INSERT INTO orders
-        (shop_name, shop_address, order_number, wolt_order_id, placed_at, delivered_at,
+        (shop_name, shop_address, order_number, wolt_order_id, placed_at, ordered_on, delivered_at,
          delivery_address, subtotal, service_fee, delivery_fee, bag_charge, total, currency, raw_text)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .bind(
       o.shopName,
@@ -188,6 +207,7 @@ api.post("/orders/import", async (c) => {
       o.orderNumber,
       o.woltOrderId,
       o.placedAt,
+      o.placedOn,
       o.deliveredAt,
       o.deliveryAddress,
       o.subtotal,
@@ -202,6 +222,8 @@ api.post("/orders/import", async (c) => {
   const orderId = orderRes.meta.last_row_id;
 
   for (const it of o.items) {
+    // Skip items that were ordered but not delivered/charged.
+    if (it.notIncluded) continue;
     const norm = normalizeName(it.name);
     let catalogId: number | null = null;
 
@@ -245,7 +267,8 @@ api.post("/orders/import", async (c) => {
       .run();
   }
 
-  return c.json({ id: orderId, items: o.items.length }, 201);
+  const storedCount = o.items.filter((it) => !it.isFee && !it.notIncluded).length;
+  return c.json({ id: orderId, items: storedCount }, 201);
 });
 
 // ---- "Where to buy": match the list against shops you've ordered from ----
@@ -321,6 +344,91 @@ api.get("/suggestions", async (c) => {
     )
     .all();
   return c.json(results);
+});
+
+// ---- Restock predictions (learns how often you buy each item) ----
+
+api.get("/restock", async (c) => {
+  const db = c.env.DB;
+  const today = new Date().toISOString().slice(0, 10);
+
+  // All purchase dates per item, excluding anything already on the list.
+  const { results } = await db
+    .prepare(
+      `SELECT oi.norm_name AS norm, oi.name AS name, c.category AS category,
+              c.last_price AS price, c.last_shop AS shop, o.ordered_on AS on_date
+       FROM order_items oi
+       JOIN orders o ON oi.order_id = o.id
+       LEFT JOIN catalog_items c ON c.norm_name = oi.norm_name
+       WHERE oi.is_fee = 0 AND o.ordered_on IS NOT NULL
+         AND oi.norm_name NOT IN (SELECT norm_name FROM shopping_list WHERE checked = 0)`,
+    )
+    .all<{
+      norm: string;
+      name: string;
+      category: string | null;
+      price: number | null;
+      shop: string | null;
+      on_date: string;
+    }>();
+
+  // Group by item.
+  const byItem = new Map<
+    string,
+    { name: string; category: string | null; price: number | null; shop: string | null; dates: Set<string> }
+  >();
+  for (const r of results) {
+    const e =
+      byItem.get(r.norm) ??
+      { name: r.name, category: r.category, price: r.price, shop: r.shop, dates: new Set<string>() };
+    e.dates.add(r.on_date);
+    byItem.set(r.norm, e);
+  }
+
+  const daysBetween = (a: string, b: string) =>
+    Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+
+  const items = [...byItem.entries()]
+    .map(([norm, e]) => {
+      const dates = [...e.dates].sort();
+      const timesOrdered = dates.length;
+      const lastOrdered = dates[dates.length - 1];
+      const daysSinceLast = daysBetween(lastOrdered, today);
+
+      // Average interval needs at least two distinct purchase dates.
+      let avgIntervalDays: number | null = null;
+      if (timesOrdered >= 2) {
+        let sum = 0;
+        for (let i = 1; i < dates.length; i++) sum += daysBetween(dates[i - 1], dates[i]);
+        avgIntervalDays = Math.max(1, Math.round(sum / (dates.length - 1)));
+      }
+
+      const dueInDays = avgIntervalDays != null ? avgIntervalDays - daysSinceLast : null;
+      // status: due (overdue/now), soon (within a quarter of the cycle), ok.
+      let status: "due" | "soon" | "ok" = "ok";
+      if (dueInDays != null) {
+        if (dueInDays <= 0) status = "due";
+        else if (dueInDays <= Math.ceil((avgIntervalDays ?? 0) / 4)) status = "soon";
+      }
+
+      return {
+        name: e.name,
+        norm_name: norm,
+        category: e.category,
+        last_price: e.price,
+        last_shop: e.shop,
+        timesOrdered,
+        avgIntervalDays,
+        daysSinceLast,
+        dueInDays,
+        status,
+      };
+    })
+    // Only items with a real cadence are useful for prediction.
+    .filter((i) => i.avgIntervalDays != null)
+    .sort((a, b) => (a.dueInDays ?? 0) - (b.dueInDays ?? 0));
+
+  return c.json(items);
 });
 
 // ---- Spending insights ----
