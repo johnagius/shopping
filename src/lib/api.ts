@@ -1,5 +1,6 @@
 import type {
   CatalogItem,
+  Category,
   Insights,
   Order,
   ParsedOrder,
@@ -50,7 +51,7 @@ export const api = {
     req<CatalogItem[]>(`/catalog${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   updateCatalogItem: (
     id: number,
-    patch: { name?: string; category?: string; last_price?: number | null },
+    patch: { name?: string; category?: string; last_price?: number | null; tier?: string },
   ) => req<{ ok: true }>(`/catalog/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCatalogItem: (id: number) =>
     req<{ ok: true }>(`/catalog/${id}`, { method: "DELETE" }),
@@ -82,4 +83,11 @@ export const api = {
 
   // Spending insights
   getInsights: () => req<Insights>("/insights"),
+
+  // Categories (aisles)
+  getCategories: () => req<Category[]>("/categories"),
+  addCategory: (name: string) =>
+    req<Category>("/categories", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteCategory: (id: number) =>
+    req<{ ok: true }>(`/categories/${id}`, { method: "DELETE" }),
 };

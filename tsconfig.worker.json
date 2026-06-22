@@ -17,5 +17,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["worker", "src/lib"]
+  "include": ["worker", "src/lib/woltParser.ts", "src/lib/categorize.ts", "src/lib/types.ts"]
 }

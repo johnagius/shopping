@@ -220,7 +220,12 @@ api.get("/catalog", async (c) => {
 api.patch("/catalog/:id", async (c) => {
   const db = c.env.DB;
   const id = Number(c.req.param("id"));
-  const body = await c.req.json<{ name?: string; category?: string; last_price?: number | null }>();
+  const body = await c.req.json<{
+    name?: string;
+    category?: string;
+    last_price?: number | null;
+    tier?: string;
+  }>();
 
   const existing = await db
     .prepare("SELECT norm_name FROM catalog_items WHERE id = ?")
@@ -243,6 +248,10 @@ api.patch("/catalog/:id", async (c) => {
   if (body.last_price !== undefined) {
     sets.push("last_price = ?");
     vals.push(body.last_price);
+  }
+  if (body.tier !== undefined) {
+    sets.push("tier = ?");
+    vals.push(body.tier);
   }
   if (sets.length === 0) return c.json({ ok: true });
   sets.push("updated_at = datetime('now')");
@@ -269,6 +278,36 @@ api.patch("/catalog/:id", async (c) => {
 api.delete("/catalog/:id", async (c) => {
   const id = Number(c.req.param("id"));
   await c.env.DB.prepare("DELETE FROM catalog_items WHERE id = ?").bind(id).run();
+  return c.json({ ok: true });
+});
+
+// ---- Categories (aisles) ----
+
+api.get("/categories", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM categories ORDER BY sort_order ASC, name ASC",
+  ).all();
+  return c.json(results);
+});
+
+api.post("/categories", async (c) => {
+  const body = await c.req.json<{ name: string }>();
+  const name = body.name?.trim();
+  if (!name) return c.json({ error: "name required" }, 400);
+  // Slot new categories in just before "Other" (which sits at 999).
+  const max = await c.env.DB.prepare(
+    "SELECT COALESCE(MAX(sort_order), 0) AS m FROM categories WHERE sort_order < 900",
+  ).first<{ m: number }>();
+  await c.env.DB.prepare("INSERT OR IGNORE INTO categories (name, sort_order) VALUES (?, ?)")
+    .bind(name, (max?.m ?? 0) + 10)
+    .run();
+  const row = await c.env.DB.prepare("SELECT * FROM categories WHERE name = ?").bind(name).first();
+  return c.json(row, 201);
+});
+
+api.delete("/categories/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  await c.env.DB.prepare("DELETE FROM categories WHERE id = ?").bind(id).run();
   return c.json({ ok: true });
 });
 

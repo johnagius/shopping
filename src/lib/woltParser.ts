@@ -19,7 +19,7 @@ import type { ParsedLineItem, ParsedOrder } from "./types";
 // The parser is deliberately tolerant: missing prices/quantities don't throw,
 // they just produce nulls/defaults so the user can fix them in the preview.
 
-const FEE_NAMES = new Set(["bag charge"]);
+const FEE_NAMES = new Set(["bag charge", "bag fee"]);
 
 function isPriceLine(line: string): boolean {
   return /^€?\s*\d{1,6}([.,]\d{1,2})?$/.test(line.trim());

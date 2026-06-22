@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../lib/api";
-import { AISLES, aisleOrder } from "../lib/categorize";
+import { useCategories, ADD_CATEGORY_VALUE } from "../lib/useCategories";
 import { parseWoltReceipt } from "../lib/woltParser";
-import type { CatalogItem, RestockItem, ShoppingListItem } from "../lib/types";
+import { QuickAddPicker } from "./QuickAddPicker";
+import type { CatalogItem, ShoppingListItem } from "../lib/types";
 
-/** Does pasted text look like a Wolt receipt rather than a plain item name? */
 function looksLikeReceipt(text: string): boolean {
   if (!/\n/.test(text)) return false;
   if (/total sum/i.test(text) || /order id/i.test(text) || /included in the order/i.test(text)) {
@@ -35,21 +35,14 @@ export function ShoppingList({
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [suggestions, setSuggestions] = useState<CatalogItem[]>([]);
-  const [usual, setUsual] = useState<CatalogItem[]>([]);
-  const [restock, setRestock] = useState<RestockItem[]>([]);
   const [edit, setEdit] = useState<EditState | null>(null);
+  const [showPicker, setShowPicker] = useState(false);
+  const { categories, orderOf, addNew } = useCategories();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, sugg, due] = await Promise.all([
-        api.getList(),
-        api.getSuggestions(),
-        api.getRestock(),
-      ]);
-      setItems(list);
-      setUsual(sugg);
-      setRestock(due);
+      setItems(await api.getList());
     } finally {
       setLoading(false);
     }
@@ -128,11 +121,7 @@ export function ShoppingList({
 
   const saveEdit = async () => {
     if (!edit) return;
-    await api.updateListItem(edit.id, {
-      name: edit.name,
-      note: edit.note,
-      category: edit.category,
-    });
+    await api.updateListItem(edit.id, { name: edit.name, note: edit.note, category: edit.category });
     setEdit(null);
     await load();
   };
@@ -147,25 +136,6 @@ export function ShoppingList({
     if (!window.confirm("Clear the entire list?")) return;
     await Promise.all(items.map((i) => api.deleteListItem(i.id)));
     showToast("List cleared");
-    await load();
-  };
-
-  const buildWeekly = async () => {
-    const onList = new Set(items.filter((i) => !i.checked).map((i) => i.norm_name));
-    const names = new Set<string>();
-    restock.filter((r) => r.status === "due" || r.status === "soon").forEach((r) => {
-      if (!onList.has(r.norm_name)) names.add(r.name);
-    });
-    usual.forEach((u) => {
-      if (!onList.has(u.norm_name)) names.add(u.name);
-    });
-    const list = [...names];
-    if (list.length === 0) {
-      showToast("Nothing to add — list already has your usuals");
-      return;
-    }
-    await api.addItemsToList(list.map((n) => ({ name: n })));
-    showToast(`Added ${list.length} items to your list`);
     await load();
   };
 
@@ -188,7 +158,7 @@ export function ShoppingList({
     const cat = it.category ?? "Other";
     groups.set(cat, [...(groups.get(cat) ?? []), it]);
   }
-  const sortedGroups = [...groups.entries()].sort((a, b) => aisleOrder(a[0]) - aisleOrder(b[0]));
+  const sortedGroups = [...groups.entries()].sort((a, b) => orderOf(a[0]) - orderOf(b[0]));
 
   const renderItem = (it: ShoppingListItem) => {
     if (edit && edit.id === it.id) {
@@ -208,14 +178,25 @@ export function ShoppingList({
           />
           <select
             value={edit.category}
-            onChange={(e) => setEdit({ ...edit, category: e.target.value })}
+            onChange={async (e) => {
+              if (e.target.value === ADD_CATEGORY_VALUE) {
+                const n = await addNew();
+                if (n) setEdit((cur) => (cur ? { ...cur, category: n } : cur));
+                return;
+              }
+              setEdit((cur) => (cur ? { ...cur, category: e.target.value } : cur));
+            }}
             style={{ width: "auto", padding: "8px", fontSize: 13 }}
           >
-            {AISLES.map((a) => (
+            {categories.map((a) => (
               <option key={a} value={a}>
                 {a}
               </option>
             ))}
+            {edit.category && !categories.includes(edit.category) && (
+              <option value={edit.category}>{edit.category}</option>
+            )}
+            <option value={ADD_CATEGORY_VALUE}>➕ Add category…</option>
           </select>
           <div className="spacer" />
           <button className="btn secondary" onClick={() => setEdit(null)}>
@@ -245,11 +226,7 @@ export function ShoppingList({
           </div>
         </div>
         <div className="spacer" />
-        <button
-          className="icon"
-          title="Copy name (to paste into Wolt)"
-          onClick={() => copyText(it.name, showToast, "Copied")}
-        >
+        <button className="icon" title="Copy name" onClick={() => copyText(it.name, showToast, "Copied")}>
           ⧉
         </button>
         {!it.checked && (
@@ -302,8 +279,8 @@ export function ShoppingList({
           </div>
         )}
         <div className="row" style={{ marginTop: 10, gap: 8 }}>
-          <button className="btn secondary" onClick={buildWeekly}>
-            ⚡ Build weekly shop
+          <button className="btn secondary" onClick={() => setShowPicker((v) => !v)}>
+            {showPicker ? "Close quick add" : "➕ Quick add from inventory"}
           </button>
           {active.length > 0 && (
             <button className="btn secondary" onClick={copyList}>
@@ -313,59 +290,16 @@ export function ShoppingList({
         </div>
       </div>
 
-      {restock.some((r) => r.status === "due" || r.status === "soon") && (
-        <div className="card">
-          <div className="row">
-            <h2 className="section" style={{ margin: 0 }}>
-              Due to buy again
-            </h2>
-            <div className="spacer" />
-            {restock.some((r) => r.status === "due") && (
-              <button
-                className="btn secondary"
-                onClick={async () => {
-                  const due = restock.filter((r) => r.status === "due");
-                  await api.addItemsToList(due.map((r) => ({ name: r.name })));
-                  showToast(`Added ${due.length} restock items`);
-                  await load();
-                }}
-              >
-                Add all due
-              </button>
-            )}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-            {restock
-              .filter((r) => r.status === "due" || r.status === "soon")
-              .slice(0, 12)
-              .map((r) => (
-                <button
-                  key={r.norm_name}
-                  className={`tag ${r.status === "due" ? "warn" : ""}`}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => add(r.name)}
-                >
-                  + {r.name}
-                  {r.status === "due" ? " · due" : r.dueInDays != null ? ` · ~${r.dueInDays}d` : ""}
-                </button>
-              ))}
-          </div>
-        </div>
-      )}
-
-      {usual.length > 0 && (
-        <div className="card">
-          <h2 className="section" style={{ marginTop: 0 }}>
-            You usually buy
-          </h2>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {usual.slice(0, 10).map((s) => (
-              <button key={s.id} className="tag" style={{ cursor: "pointer" }} onClick={() => add(s.name)}>
-                + {s.name}
-              </button>
-            ))}
-          </div>
-        </div>
+      {showPicker && (
+        <QuickAddPicker
+          existingNorms={new Set(active.map((i) => i.norm_name))}
+          showToast={showToast}
+          onClose={() => setShowPicker(false)}
+          onAdded={() => {
+            setShowPicker(false);
+            void load();
+          }}
+        />
       )}
 
       {loading ? (
@@ -374,7 +308,7 @@ export function ShoppingList({
         <div className="empty">
           Your list is empty.
           <br />
-          Add items, hit <strong>Build weekly shop</strong>, or reorder from <strong>Orders</strong>.
+          Add items, use <strong>Quick add</strong>, or reorder from <strong>Orders</strong>.
         </div>
       ) : (
         <>

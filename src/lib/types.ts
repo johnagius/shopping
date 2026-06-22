@@ -5,6 +5,7 @@ export interface CatalogItem {
   name: string;
   norm_name: string;
   category: string | null;
+  tier: string | null;
   last_price: number | null;
   last_shop: string | null;
   last_ordered_at: string | null;
@@ -60,6 +61,13 @@ export interface OrderItem {
   substitution_for: string | null;
   is_fee: number; // 0 | 1
   catalog_id: number | null;
+}
+
+export interface Category {
+  id: number;
+  name: string;
+  sort_order: number;
+  created_at: string;
 }
 
 // ---- Wolt parsing ----
