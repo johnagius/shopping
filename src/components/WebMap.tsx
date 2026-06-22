@@ -30,6 +30,61 @@ function wrapLabel(name: string, maxChars: number): string[] {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+type Rect = { x: number; y: number; w: number; h: number };
+
+/**
+ * Push apart any overlapping rectangles and keep them inside `bounds`, treating
+ * `obstacles` as fixed. Mutates the rects' centres in place.
+ */
+function resolveCollisions(
+  rects: Rect[],
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  obstacles: Rect[],
+  iters = 140,
+  gap = 10,
+) {
+  const clampRect = (r: Rect) => {
+    const minx = bounds.minX + r.w / 2;
+    const maxx = bounds.maxX - r.w / 2;
+    const miny = bounds.minY + r.h / 2;
+    const maxy = bounds.maxY - r.h / 2;
+    r.x = maxx >= minx ? clamp(r.x, minx, maxx) : (bounds.minX + bounds.maxX) / 2;
+    r.y = maxy >= miny ? clamp(r.y, miny, maxy) : (bounds.minY + bounds.maxY) / 2;
+  };
+  const sep = (a: Rect, b: Rect, moveA: boolean) => {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    const ox = a.w / 2 + b.w / 2 + gap - Math.abs(dx);
+    const oy = a.h / 2 + b.h / 2 + gap - Math.abs(dy);
+    if (ox <= 0 || oy <= 0) return;
+    if (ox < oy) {
+      if (dx === 0) dx = 1;
+      const s = ox * (dx < 0 ? -1 : 1);
+      if (moveA) {
+        a.x -= s / 2;
+        b.x += s / 2;
+      } else {
+        b.x += s;
+      }
+    } else {
+      if (dy === 0) dy = 1;
+      const s = oy * (dy < 0 ? -1 : 1);
+      if (moveA) {
+        a.y -= s / 2;
+        b.y += s / 2;
+      } else {
+        b.y += s;
+      }
+    }
+  };
+  for (let it = 0; it < iters; it++) {
+    for (let i = 0; i < rects.length; i++)
+      for (let j = i + 1; j < rects.length; j++) sep(rects[i], rects[j], true);
+    for (const o of obstacles) for (const r of rects) sep(o, r, false);
+    for (const r of rects) clampRect(r);
+  }
+}
+
 type Node = {
   item: CatalogItem;
   x: number;
@@ -129,10 +184,15 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
       const cy = h / 2;
       const aisles: AisleNode[] = ordered.map(([cat], i) => {
         const ang = -Math.PI / 2 + (2 * Math.PI * i) / A;
-        const lines = [cat];
-        const p = sizePill(lines, font);
+        const p = sizePill([cat], font);
         return { cat, x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, w: p.w, h: p.h };
       });
+      const hubR = font * 1.6;
+      resolveCollisions(
+        aisles,
+        { minX: 8, minY: 8, maxX: w - 8, maxY: h - 8 },
+        [{ x: cx, y: cy, w: hubR * 2 + 16, h: hubR * 2 + 16 }],
+      );
       return { mode: "collapsed" as const, aisles, nodes: [] as Node[], anchor: null, font, hub: { cx, cy } };
     }
 
@@ -181,6 +241,8 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
     });
     const ap = sizePill([openCat], clamp(font * 1.05, 11, 26));
     const anchor: AisleNode = { cat: openCat, x: pad + ap.w / 2, y: h - pad - ap.h / 2, w: ap.w, h: ap.h };
+
+    resolveCollisions(nodes, { minX: pad, minY: pad, maxX: w - pad, maxY: h - pad }, [anchor]);
 
     return { mode: "expanded" as const, aisles: [] as AisleNode[], nodes, anchor, font, hub: { cx: 0, cy: 0 } };
   }, [items, orderOf, openCat, size]);
