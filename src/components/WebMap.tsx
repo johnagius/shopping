@@ -72,7 +72,7 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
   };
 
   // Build the radial layout.
-  const { branches, size, center } = useMemo(() => {
+  const { branches, view, center } = useMemo(() => {
     const groups = new Map<string, CatalogItem[]>();
     for (const it of items) {
       const cat = it.category ?? "Other";
@@ -117,7 +117,26 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
       return { cat, ax, ay, aw: pillW(cat), nodes };
     });
 
-    return { branches: br, size: sz, center: { x: cx, y: cy } };
+    // Bounding box of everything drawn, so the SVG can fit-to-view (no off-centre,
+    // no panning into empty space).
+    let minX = cx - 30;
+    let minY = cy - 30;
+    let maxX = cx + 30;
+    let maxY = cy + 30;
+    const grow = (x: number, y: number, halfW: number, halfH: number) => {
+      minX = Math.min(minX, x - halfW);
+      minY = Math.min(minY, y - halfH);
+      maxX = Math.max(maxX, x + halfW);
+      maxY = Math.max(maxY, y + halfH);
+    };
+    for (const b of br) {
+      grow(b.ax, b.ay, b.aw / 2, 13);
+      for (const n of b.nodes) grow(n.x, n.y, n.w / 2, 12);
+    }
+    const M = 40;
+    const view = { x: minX - M, y: minY - M, w: maxX - minX + 2 * M, h: maxY - minY + 2 * M };
+
+    return { branches: br, view, center: { x: cx, y: cy } };
   }, [items, orderOf]);
 
   return (
@@ -125,7 +144,7 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
       <div className="card">
         <div className="row">
           <span className="muted" style={{ fontSize: 12 }}>
-            Tap a node to copy its name and mark it added (green). Pan around the web.
+            Tap a node to copy its name and mark it added (green). The whole web fits on screen.
           </span>
           <div className="spacer" />
           {marked.size > 0 && (
@@ -143,14 +162,17 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
       ) : (
         <div
           style={{
-            overflow: "auto",
+            overflow: "hidden",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
             background: "var(--surface)",
-            maxHeight: "75vh",
           }}
         >
-          <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block" }}>
+          <svg
+            viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+            preserveAspectRatio="xMidYMid meet"
+            style={{ display: "block", width: "100%", height: "78vh" }}
+          >
             {/* spokes + branch lines */}
             {branches.map((b) => (
               <g key={`l-${b.cat}`}>
