@@ -102,24 +102,45 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
       };
     }
 
-    // Expanded: the chosen category docks bottom-left; its items fan across the rest.
+    // Expanded: the chosen category docks bottom-left; its items fan out as a
+    // web of concentric arcs sweeping up-and-right.
     const list = (groups.get(openCat) ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
-    const n = list.length || 1;
-    const cols = Math.max(1, Math.ceil(Math.sqrt(n * 1.6)));
-    const CW = 180;
-    const CH = 64;
-    const nodes: Node[] = list.map((it, k) => {
-      const col = k % cols;
-      const row = Math.floor(k / cols);
-      const label = trunc(it.short_name || it.name, 24);
-      return { item: it, x: col * CW, y: row * CH, w: pillW(label), label };
-    });
-    const rows = Math.ceil(n / cols);
-    const anchor: AisleNode = { cat: openCat, x: -10, y: (rows - 1) * CH + 110, w: pillW(openCat) };
+    const n = list.length;
 
-    for (const nd of nodes) grow(nd.x, nd.y, nd.w / 2, 12);
+    const A0 = (8 * Math.PI) / 180; // near the rightward axis
+    const A1 = (82 * Math.PI) / 180; // near straight up
+    const SPACING = 230;
+    const r0 = 200;
+    const dr = 150;
+
+    const nodes: Node[] = [];
+    let placed = 0;
+    let ring = 0;
+    while (placed < n) {
+      const r = r0 + ring * dr;
+      const cap = Math.max(1, Math.floor(((A1 - A0) * r) / SPACING));
+      const take = Math.min(cap, n - placed);
+      for (let j = 0; j < take; j++) {
+        const a = take === 1 ? (A0 + A1) / 2 : A0 + ((A1 - A0) * j) / (take - 1);
+        const it = list[placed + j];
+        const label = trunc(it.short_name || it.name, 24);
+        nodes.push({
+          item: it,
+          x: r * Math.cos(a),
+          y: -r * Math.sin(a), // up in SVG's y-down space
+          w: pillW(label),
+          label,
+        });
+      }
+      placed += take;
+      ring++;
+    }
+
+    const anchor: AisleNode = { cat: openCat, x: 0, y: 0, w: pillW(openCat) };
+
+    for (const nd of nodes) grow(nd.x, nd.y, nd.w / 2, 13);
     grow(anchor.x, anchor.y, anchor.w / 2, 16);
-    const M = 36;
+    const M = 40;
     return {
       mode: "expanded" as const,
       aisles: [] as AisleNode[],
@@ -165,7 +186,7 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
           <svg
             viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
             preserveAspectRatio="xMidYMid meet"
-            style={{ display: "block", width: "100%", height: "80vh" }}
+            style={{ display: "block", width: "100%", height: "82vh" }}
           >
             {mode === "collapsed" ? (
               <>
