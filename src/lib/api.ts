@@ -30,7 +30,7 @@ export const api = {
     }),
   updateListItem: (
     id: number,
-    patch: { quantity?: number; checked?: boolean; note?: string; category?: string },
+    patch: { name?: string; quantity?: number; checked?: boolean; note?: string; category?: string },
   ) => req<{ ok: true }>(`/list/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteListItem: (id: number) => req<{ ok: true }>(`/list/${id}`, { method: "DELETE" }),
   clearChecked: () => req<{ deleted: number }>("/list/clear-checked", { method: "POST" }),
@@ -59,6 +59,12 @@ export const api = {
   getOrders: () => req<(Order & { item_count: number })[]>("/orders"),
   getOrder: (id: number) => req<Order>(`/orders/${id}`),
   deleteOrder: (id: number) => req<{ ok: true }>(`/orders/${id}`, { method: "DELETE" }),
+  updateOrderItem: (
+    id: number,
+    patch: { name?: string; quantity?: number; unit_price?: number | null },
+  ) => req<{ ok: true }>(`/order-items/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteOrderItem: (id: number) =>
+    req<{ ok: true }>(`/order-items/${id}`, { method: "DELETE" }),
   importOrder: (order: ParsedOrder) =>
     req<{ id: number; items: number }>("/orders/import", {
       method: "POST",

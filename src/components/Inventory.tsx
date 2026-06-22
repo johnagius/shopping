@@ -1,96 +1,117 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { api } from "../lib/api";
 import { AISLES, aisleOrder } from "../lib/categorize";
 import type { CatalogItem } from "../lib/types";
 
 function InventoryRow({
   item,
-  onChanged,
+  onDeleted,
   showToast,
 }: {
   item: CatalogItem;
-  onChanged: () => void;
+  onDeleted: () => void;
   showToast: (m: string) => void;
 }) {
   const [name, setName] = useState(item.name);
   const [category, setCategory] = useState(item.category ?? "Other");
   const [price, setPrice] = useState(item.last_price != null ? String(item.last_price) : "");
+  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const orig = useRef({ name: item.name, category: item.category ?? "Other", price });
 
-  const dirty =
-    name !== item.name ||
-    category !== (item.category ?? "Other") ||
-    price !== (item.last_price != null ? String(item.last_price) : "");
+  const flash = () => {
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1000);
+  };
 
-  const save = async () => {
-    setBusy(true);
+  const save = async (patch: { name?: string; category?: string; last_price?: number | null }) => {
     try {
-      await api.updateCatalogItem(item.id, {
-        name,
-        category,
-        last_price: price === "" ? null : Number(price),
-      });
-      showToast("Saved");
-      onChanged();
+      await api.updateCatalogItem(item.id, patch);
+      flash();
     } catch (e) {
       showToast((e as Error).message);
-    } finally {
-      setBusy(false);
     }
   };
 
+  const onNameBlur = () => {
+    const v = name.trim();
+    if (v && v !== orig.current.name) {
+      orig.current.name = v;
+      void save({ name: v });
+    }
+  };
+  const onPriceBlur = () => {
+    if (price !== orig.current.price) {
+      orig.current.price = price;
+      void save({ last_price: price === "" ? null : Number(price) });
+    }
+  };
+  const onCat = (v: string) => {
+    setCategory(v);
+    orig.current.category = v;
+    void save({ category: v });
+  };
+
   const del = async () => {
-    if (!window.confirm(`Delete "${item.name}" from your inventory?`)) return;
+    if (!window.confirm(`Delete "${item.name}"?`)) return;
     setBusy(true);
     try {
       await api.deleteCatalogItem(item.id);
-      showToast("Deleted");
-      onChanged();
+      onDeleted();
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="list-item" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
-      <div style={{ flex: "1 1 100%" }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} style={{ fontWeight: 600 }} />
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "5px 0",
+        borderBottom: "1px solid var(--border)",
+        opacity: busy ? 0.5 : 1,
+      }}
+    >
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={onNameBlur}
+        style={{ flex: "1 1 120px", minWidth: 0, padding: "6px 8px", fontSize: 13 }}
+      />
+      <select
+        value={category}
+        onChange={(e) => onCat(e.target.value)}
+        style={{ flex: "0 0 auto", width: "auto", padding: "6px 4px", fontSize: 12 }}
+      >
+        {AISLES.map((a) => (
+          <option key={a} value={a}>
+            {a}
+          </option>
+        ))}
+      </select>
+      <div style={{ position: "relative", flex: "0 0 64px" }}>
+        <span style={{ position: "absolute", left: 6, top: 7, color: "var(--muted)", fontSize: 12 }}>€</span>
+        <input
+          value={price}
+          inputMode="decimal"
+          onChange={(e) => setPrice(e.target.value)}
+          onBlur={onPriceBlur}
+          style={{ padding: "6px 4px 6px 16px", fontSize: 13 }}
+        />
       </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 6, width: "100%", alignItems: "center" }}>
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          style={{ width: "auto", padding: "8px 8px", fontSize: 13 }}
-        >
-          {AISLES.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </select>
-        <div style={{ position: "relative", width: 96 }}>
-          <span style={{ position: "absolute", left: 8, top: 9, color: "var(--muted)" }}>€</span>
-          <input
-            value={price}
-            inputMode="decimal"
-            onChange={(e) => setPrice(e.target.value)}
-            style={{ paddingLeft: 20 }}
-            placeholder="price"
-          />
-        </div>
-        <span className="tag" title="times ordered">
-          ×{item.order_count}
-        </span>
-        <div className="spacer" />
-        {dirty && (
-          <button className="btn" disabled={busy} onClick={save} style={{ padding: "8px 12px" }}>
-            Save
-          </button>
-        )}
-        <button className="btn danger" disabled={busy} onClick={del} style={{ padding: "8px 12px" }}>
-          Delete
-        </button>
-      </div>
+      <span
+        className="tag"
+        title="times ordered"
+        style={{ flex: "0 0 auto", padding: "2px 6px", fontSize: 11 }}
+      >
+        ×{item.order_count}
+      </span>
+      <span style={{ flex: "0 0 14px", color: "var(--accent)", fontSize: 13 }}>{saved ? "✓" : ""}</span>
+      <button className="icon" onClick={del} disabled={busy} aria-label="delete" style={{ padding: 4 }}>
+        ✕
+      </button>
     </div>
   );
 }
@@ -120,13 +141,14 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
   return (
     <div>
       <div className="card">
-        <h2 className="section" style={{ marginTop: 0 }}>
-          Inventory ({items.length})
-        </h2>
-        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-          Every product the app remembers — these power autocomplete, suggestions,
-          restock and “where to buy”. Edit a name, aisle or price, or delete anything
-          that shouldn't be here.
+        <div className="row">
+          <h2 className="section" style={{ margin: 0 }}>
+            Inventory ({items.length})
+          </h2>
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: "4px 0 8px" }}>
+          Edits save automatically. These items power autocomplete, suggestions, restock &amp;
+          “where to buy”.
         </p>
         <input placeholder="Search inventory…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
@@ -140,9 +162,9 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
             : "No matches."}
         </div>
       ) : (
-        <div className="card">
+        <div className="card" style={{ paddingTop: 4, paddingBottom: 4 }}>
           {filtered.map((it) => (
-            <InventoryRow key={it.id} item={it} onChanged={load} showToast={showToast} />
+            <InventoryRow key={it.id} item={it} onDeleted={load} showToast={showToast} />
           ))}
         </div>
       )}

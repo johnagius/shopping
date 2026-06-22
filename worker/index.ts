@@ -50,6 +50,48 @@ async function addToList(
   return res.meta.last_row_id;
 }
 
+/** Refresh a catalog item's order_count and last price/shop from order history. */
+async function recomputeCatalog(db: D1Database, norm: string) {
+  const stat = await db
+    .prepare("SELECT COUNT(DISTINCT order_id) AS cnt FROM order_items WHERE norm_name = ? AND is_fee = 0")
+    .bind(norm)
+    .first<{ cnt: number }>();
+  const latest = await db
+    .prepare(
+      `SELECT oi.unit_price AS price, o.shop_name AS shop, o.ordered_on AS on_date
+       FROM order_items oi JOIN orders o ON oi.order_id = o.id
+       WHERE oi.norm_name = ? AND oi.is_fee = 0 ORDER BY o.created_at DESC LIMIT 1`,
+    )
+    .bind(norm)
+    .first<{ price: number | null; shop: string | null; on_date: string | null }>();
+  await db
+    .prepare(
+      `UPDATE catalog_items SET order_count = ?, last_price = ?, last_shop = ?, last_ordered_at = ?,
+         updated_at = datetime('now') WHERE norm_name = ?`,
+    )
+    .bind(stat?.cnt ?? 0, latest?.price ?? null, latest?.shop ?? null, latest?.on_date ?? null, norm)
+    .run();
+}
+
+/** Recompute an order's subtotal & total from its current line items + fees. */
+async function recomputeOrderTotals(db: D1Database, orderId: number) {
+  const r = await db
+    .prepare(
+      "SELECT COALESCE(SUM(CASE WHEN is_fee = 0 THEN line_total ELSE 0 END), 0) AS subtotal FROM order_items WHERE order_id = ?",
+    )
+    .bind(orderId)
+    .first<{ subtotal: number }>();
+  const o = await db
+    .prepare("SELECT service_fee, delivery_fee, bag_charge FROM orders WHERE id = ?")
+    .bind(orderId)
+    .first<{ service_fee: number | null; delivery_fee: number | null; bag_charge: number | null }>();
+  const subtotal = Math.round((r?.subtotal ?? 0) * 100) / 100;
+  const total =
+    Math.round((subtotal + (o?.service_fee ?? 0) + (o?.delivery_fee ?? 0) + (o?.bag_charge ?? 0)) * 100) /
+    100;
+  await db.prepare("UPDATE orders SET subtotal = ?, total = ? WHERE id = ?").bind(subtotal, total, orderId).run();
+}
+
 // ---- Shopping list ----
 
 api.get("/list", async (c) => {
@@ -72,6 +114,7 @@ api.post("/list", async (c) => {
 api.patch("/list/:id", async (c) => {
   const id = Number(c.req.param("id"));
   const body = await c.req.json<{
+    name?: string;
     quantity?: number;
     checked?: boolean;
     note?: string;
@@ -79,6 +122,13 @@ api.patch("/list/:id", async (c) => {
   }>();
   const sets: string[] = [];
   const vals: unknown[] = [];
+  if (body.name !== undefined && body.name.trim()) {
+    const nm = body.name.trim();
+    const norm = normalizeName(nm);
+    const catId = await findCatalogId(c.env.DB, norm);
+    sets.push("name = ?", "norm_name = ?", "catalog_id = ?");
+    vals.push(nm, norm, catId);
+  }
   if (body.quantity !== undefined) {
     sets.push("quantity = ?");
     vals.push(body.quantity);
@@ -257,31 +307,66 @@ api.delete("/orders/:id", async (c) => {
 
   await db.prepare("DELETE FROM orders WHERE id = ?").bind(id).run(); // cascades to order_items
 
-  // Recompute order_count / last_* for each affected item from what remains.
+  // Refresh stats for each affected catalog item from what remains.
   for (const { norm_name } of norms) {
-    const stat = await db
-      .prepare(
-        `SELECT COUNT(DISTINCT oi.order_id) AS cnt FROM order_items oi WHERE oi.norm_name = ? AND oi.is_fee = 0`,
-      )
-      .bind(norm_name)
-      .first<{ cnt: number }>();
-    const latest = await db
-      .prepare(
-        `SELECT oi.unit_price AS price, o.shop_name AS shop, o.ordered_on AS on_date
-         FROM order_items oi JOIN orders o ON oi.order_id = o.id
-         WHERE oi.norm_name = ? AND oi.is_fee = 0
-         ORDER BY o.created_at DESC LIMIT 1`,
-      )
-      .bind(norm_name)
-      .first<{ price: number | null; shop: string | null; on_date: string | null }>();
-    await db
-      .prepare(
-        `UPDATE catalog_items SET order_count = ?, last_price = ?, last_shop = ?, last_ordered_at = ?,
-           updated_at = datetime('now') WHERE norm_name = ?`,
-      )
-      .bind(stat?.cnt ?? 0, latest?.price ?? null, latest?.shop ?? null, latest?.on_date ?? null, norm_name)
-      .run();
+    await recomputeCatalog(db, norm_name);
   }
+  return c.json({ ok: true });
+});
+
+// ---- Order line items (edit / delete within a saved order) ----
+
+api.patch("/order-items/:id", async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param("id"));
+  const body = await c.req.json<{ name?: string; quantity?: number; unit_price?: number | null }>();
+
+  const row = await db
+    .prepare("SELECT * FROM order_items WHERE id = ?")
+    .bind(id)
+    .first<{
+      order_id: number;
+      name: string;
+      norm_name: string;
+      quantity: number;
+      unit_price: number | null;
+      is_fee: number;
+    }>();
+  if (!row) return c.json({ error: "not found" }, 404);
+
+  const name = body.name?.trim() || row.name;
+  const norm = normalizeName(name);
+  const quantity = body.quantity ?? row.quantity;
+  const unitPrice = body.unit_price !== undefined ? body.unit_price : row.unit_price;
+  const lineTotal = unitPrice != null ? Math.round(unitPrice * quantity * 100) / 100 : null;
+
+  await db
+    .prepare(
+      "UPDATE order_items SET name = ?, norm_name = ?, quantity = ?, unit_price = ?, line_total = ? WHERE id = ?",
+    )
+    .bind(name, norm, quantity, unitPrice, lineTotal, id)
+    .run();
+
+  await recomputeOrderTotals(db, row.order_id);
+  if (!row.is_fee) {
+    await recomputeCatalog(db, norm);
+    if (norm !== row.norm_name) await recomputeCatalog(db, row.norm_name);
+  }
+  return c.json({ ok: true });
+});
+
+api.delete("/order-items/:id", async (c) => {
+  const db = c.env.DB;
+  const id = Number(c.req.param("id"));
+  const row = await db
+    .prepare("SELECT order_id, norm_name, is_fee FROM order_items WHERE id = ?")
+    .bind(id)
+    .first<{ order_id: number; norm_name: string; is_fee: number }>();
+  if (!row) return c.json({ error: "not found" }, 404);
+
+  await db.prepare("DELETE FROM order_items WHERE id = ?").bind(id).run();
+  await recomputeOrderTotals(db, row.order_id);
+  if (!row.is_fee) await recomputeCatalog(db, row.norm_name);
   return c.json({ ok: true });
 });
 

@@ -11,6 +11,8 @@ function fmtDate(o: Order & { item_count?: number }): string {
     : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
+type LineEdit = { id: number; name: string; quantity: number; unit_price: string };
+
 export function OrderHistory({
   showToast,
   onReordered,
@@ -23,6 +25,7 @@ export function OrderHistory({
   const [open, setOpen] = useState<number | null>(null);
   const [detail, setDetail] = useState<Record<number, OrderItem[]>>({});
   const [busy, setBusy] = useState<number | null>(null);
+  const [lineEdit, setLineEdit] = useState<LineEdit | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,16 +40,18 @@ export function OrderHistory({
     void load();
   }, [load]);
 
+  const loadDetail = async (id: number) => {
+    const o = await api.getOrder(id);
+    setDetail((d) => ({ ...d, [id]: o.items ?? [] }));
+  };
+
   const toggle = async (id: number) => {
     if (open === id) {
       setOpen(null);
       return;
     }
     setOpen(id);
-    if (!detail[id]) {
-      const o = await api.getOrder(id);
-      setDetail((d) => ({ ...d, [id]: o.items ?? [] }));
-    }
+    if (!detail[id]) await loadDetail(id);
   };
 
   const reorderAll = async (o: Order) => {
@@ -72,6 +77,24 @@ export function OrderHistory({
     } finally {
       setBusy(null);
     }
+  };
+
+  const saveLine = async (orderId: number) => {
+    if (!lineEdit) return;
+    await api.updateOrderItem(lineEdit.id, {
+      name: lineEdit.name,
+      quantity: lineEdit.quantity,
+      unit_price: lineEdit.unit_price === "" ? null : Number(lineEdit.unit_price),
+    });
+    setLineEdit(null);
+    await Promise.all([loadDetail(orderId), load()]);
+  };
+
+  const deleteLine = async (orderId: number, it: OrderItem) => {
+    if (!window.confirm(`Remove "${it.name}" from this order?`)) return;
+    await api.deleteOrderItem(it.id);
+    showToast("Item removed");
+    await Promise.all([loadDetail(orderId), load()]);
   };
 
   if (loading) return <div className="empty">Loading…</div>;
@@ -118,40 +141,93 @@ export function OrderHistory({
 
           {open === o.id && (
             <div style={{ marginTop: 10 }}>
-              {(detail[o.id] ?? []).map((it) => (
-                <div key={it.id} className="list-item">
-                  <div>
-                    <div className="name">
-                      {it.quantity > 1 ? `${it.quantity}× ` : ""}
-                      {it.name}
-                      {it.is_fee ? <span className="tag" style={{ marginLeft: 6 }}>fee</span> : null}
+              {(detail[o.id] ?? []).map((it) =>
+                lineEdit && lineEdit.id === it.id ? (
+                  <div key={it.id} className="list-item" style={{ flexWrap: "wrap", gap: 8 }}>
+                    <input
+                      value={lineEdit.name}
+                      onChange={(e) => setLineEdit({ ...lineEdit, name: e.target.value })}
+                      style={{ flex: "1 1 100%", fontWeight: 600 }}
+                      autoFocus
+                    />
+                    <div className="qty">
+                      <button
+                        onClick={() =>
+                          setLineEdit({ ...lineEdit, quantity: Math.max(1, lineEdit.quantity - 1) })
+                        }
+                      >
+                        −
+                      </button>
+                      <span>{lineEdit.quantity}</span>
+                      <button onClick={() => setLineEdit({ ...lineEdit, quantity: lineEdit.quantity + 1 })}>
+                        +
+                      </button>
                     </div>
-                    {it.substitution_for && (
-                      <div className="sub">↪ was “{it.substitution_for}”</div>
-                    )}
-                  </div>
-                  <div className="spacer" />
-                  <span className="muted" style={{ marginRight: 8 }}>
-                    {it.line_total != null ? `€${it.line_total.toFixed(2)}` : ""}
-                  </span>
-                  {!it.is_fee && (
-                    <button className="btn secondary" onClick={() => reorderOne(it)}>
-                      + Add
+                    <div style={{ position: "relative", width: 90 }}>
+                      <span style={{ position: "absolute", left: 8, top: 9, color: "var(--muted)" }}>€</span>
+                      <input
+                        value={lineEdit.unit_price}
+                        inputMode="decimal"
+                        onChange={(e) => setLineEdit({ ...lineEdit, unit_price: e.target.value })}
+                        style={{ paddingLeft: 20 }}
+                      />
+                    </div>
+                    <div className="spacer" />
+                    <button className="btn secondary" onClick={() => setLineEdit(null)}>
+                      Cancel
                     </button>
-                  )}
-                </div>
-              ))}
+                    <button className="btn" onClick={() => saveLine(o.id)}>
+                      Save
+                    </button>
+                  </div>
+                ) : (
+                  <div key={it.id} className="list-item">
+                    <div style={{ minWidth: 0 }}>
+                      <div className="name">
+                        {it.quantity > 1 ? `${it.quantity}× ` : ""}
+                        {it.name}
+                        {it.is_fee ? <span className="tag" style={{ marginLeft: 6 }}>fee</span> : null}
+                      </div>
+                      {it.substitution_for && <div className="sub">↪ was “{it.substitution_for}”</div>}
+                    </div>
+                    <div className="spacer" />
+                    <span className="muted" style={{ marginRight: 6 }}>
+                      {it.line_total != null ? `€${it.line_total.toFixed(2)}` : ""}
+                    </span>
+                    {!it.is_fee && (
+                      <>
+                        <button className="icon" title="Add to list" onClick={() => reorderOne(it)}>
+                          ＋
+                        </button>
+                        <button
+                          className="icon"
+                          title="Edit"
+                          onClick={() =>
+                            setLineEdit({
+                              id: it.id,
+                              name: it.name,
+                              quantity: it.quantity,
+                              unit_price: it.unit_price != null ? String(it.unit_price) : "",
+                            })
+                          }
+                        >
+                          ✎
+                        </button>
+                      </>
+                    )}
+                    <button className="icon" title="Remove" onClick={() => deleteLine(o.id, it)}>
+                      ✕
+                    </button>
+                  </div>
+                ),
+              )}
 
               <div className="row" style={{ marginTop: 12, gap: 8 }}>
                 <button className="btn" onClick={() => reorderAll(o)}>
                   Reorder all
                 </button>
                 <div className="spacer" />
-                <button
-                  className="btn danger"
-                  disabled={busy === o.id}
-                  onClick={() => deleteOrder(o)}
-                >
+                <button className="btn danger" disabled={busy === o.id} onClick={() => deleteOrder(o)}>
                   Delete order
                 </button>
               </div>

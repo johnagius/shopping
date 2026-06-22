@@ -10,9 +10,19 @@ function looksLikeReceipt(text: string): boolean {
   if (/total sum/i.test(text) || /order id/i.test(text) || /included in the order/i.test(text)) {
     return true;
   }
-  const products = parseWoltReceipt(text).items.filter((i) => !i.isFee);
-  return products.length >= 2;
+  return parseWoltReceipt(text).items.filter((i) => !i.isFee).length >= 2;
 }
+
+async function copyText(text: string, showToast: (m: string) => void, label: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(label);
+  } catch {
+    showToast("Couldn't copy");
+  }
+}
+
+type EditState = { id: number; name: string; note: string; category: string };
 
 export function ShoppingList({
   showToast,
@@ -27,7 +37,7 @@ export function ShoppingList({
   const [suggestions, setSuggestions] = useState<CatalogItem[]>([]);
   const [usual, setUsual] = useState<CatalogItem[]>([]);
   const [restock, setRestock] = useState<RestockItem[]>([]);
-  const [editing, setEditing] = useState<number | null>(null);
+  const [edit, setEdit] = useState<EditState | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,7 +59,6 @@ export function ShoppingList({
     void load();
   }, [load]);
 
-  // Autocomplete from the catalog of past products.
   useEffect(() => {
     const q = name.trim();
     if (q.length < 2) {
@@ -80,11 +89,9 @@ export function ShoppingList({
     await load();
   };
 
-  // Pasting into the add box: if it's a receipt, send it to Import; if it's
-  // several lines, add each as its own item; otherwise behave normally.
   const onPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const text = e.clipboardData.getData("text");
-    if (!text || !/\n/.test(text)) return; // single line: default behaviour
+    if (!text || !/\n/.test(text)) return;
     e.preventDefault();
     if (looksLikeReceipt(text)) {
       showToast("Looks like a receipt — opening Import");
@@ -92,31 +99,13 @@ export function ShoppingList({
       setName("");
       return;
     }
-    const lines = text
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     void (async () => {
-      await api.addItemsToList(lines.map((name) => ({ name })));
+      await api.addItemsToList(lines.map((n) => ({ name: n })));
       showToast(`Added ${lines.length} items`);
       setName("");
       await load();
     })();
-  };
-
-  const setCategory = async (it: ShoppingListItem, category: string) => {
-    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, category } : x)));
-    setEditing(null);
-    await api.updateListItem(it.id, { category });
-    await load();
-  };
-
-  const addAllDue = async () => {
-    const due = restock.filter((r) => r.status === "due");
-    if (due.length === 0) return;
-    await api.addItemsToList(due.map((r) => ({ name: r.name })));
-    showToast(`Added ${due.length} restock item${due.length === 1 ? "" : "s"}`);
-    await load();
   };
 
   const setChecked = async (it: ShoppingListItem, checked: boolean) => {
@@ -134,12 +123,56 @@ export function ShoppingList({
   const remove = async (it: ShoppingListItem) => {
     setItems((prev) => prev.filter((x) => x.id !== it.id));
     await api.deleteListItem(it.id);
+    await load();
+  };
+
+  const saveEdit = async () => {
+    if (!edit) return;
+    await api.updateListItem(edit.id, {
+      name: edit.name,
+      note: edit.note,
+      category: edit.category,
+    });
+    setEdit(null);
+    await load();
   };
 
   const clearChecked = async () => {
     const { deleted } = await api.clearChecked();
-    showToast(deleted ? `Cleared ${deleted} bought item${deleted > 1 ? "s" : ""}` : "Nothing checked");
+    showToast(deleted ? `Cleared ${deleted} bought` : "Nothing checked");
     await load();
+  };
+
+  const clearAll = async () => {
+    if (!window.confirm("Clear the entire list?")) return;
+    await Promise.all(items.map((i) => api.deleteListItem(i.id)));
+    showToast("List cleared");
+    await load();
+  };
+
+  const buildWeekly = async () => {
+    const onList = new Set(items.filter((i) => !i.checked).map((i) => i.norm_name));
+    const names = new Set<string>();
+    restock.filter((r) => r.status === "due" || r.status === "soon").forEach((r) => {
+      if (!onList.has(r.norm_name)) names.add(r.name);
+    });
+    usual.forEach((u) => {
+      if (!onList.has(u.norm_name)) names.add(u.name);
+    });
+    const list = [...names];
+    if (list.length === 0) {
+      showToast("Nothing to add — list already has your usuals");
+      return;
+    }
+    await api.addItemsToList(list.map((n) => ({ name: n })));
+    showToast(`Added ${list.length} items to your list`);
+    await load();
+  };
+
+  const copyList = () => {
+    const active = items.filter((i) => !i.checked);
+    if (active.length === 0) return showToast("List is empty");
+    copyText(active.map((i) => i.name).join("\n"), showToast, `Copied ${active.length} items`);
   };
 
   const checkedCount = items.filter((i) => i.checked).length;
@@ -148,7 +181,6 @@ export function ShoppingList({
     .filter((i) => !i.checked && i.last_price != null)
     .reduce((s, i) => s + (i.last_price ?? 0) * i.quantity, 0);
 
-  // Group unchecked items by aisle; checked go to a "Done" group at the bottom.
   const active = items.filter((i) => !i.checked);
   const done = items.filter((i) => i.checked);
   const groups = new Map<string, ShoppingListItem[]>();
@@ -156,63 +188,92 @@ export function ShoppingList({
     const cat = it.category ?? "Other";
     groups.set(cat, [...(groups.get(cat) ?? []), it]);
   }
-  const sortedGroups = [...groups.entries()].sort(
-    (a, b) => aisleOrder(a[0]) - aisleOrder(b[0]),
-  );
+  const sortedGroups = [...groups.entries()].sort((a, b) => aisleOrder(a[0]) - aisleOrder(b[0]));
 
-  const renderItem = (it: ShoppingListItem) => (
-    <div key={it.id} className={`list-item ${it.checked ? "checked" : ""}`}>
-      <button
-        className={`check ${it.checked ? "on" : ""}`}
-        onClick={() => setChecked(it, !it.checked)}
-        aria-label="toggle bought"
-      >
-        {it.checked ? "✓" : ""}
-      </button>
-      <div>
-        <div className="name">{it.name}</div>
-        <div className="sub">
-          {it.last_price != null && `€${it.last_price.toFixed(2)} ea`}
-          {it.last_shop ? ` · last from ${it.last_shop}` : ""}
-          {it.note ? ` · ${it.note}` : ""}
+  const renderItem = (it: ShoppingListItem) => {
+    if (edit && edit.id === it.id) {
+      return (
+        <div key={it.id} className="list-item" style={{ flexWrap: "wrap", gap: 8 }}>
+          <input
+            value={edit.name}
+            onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+            style={{ flex: "1 1 100%", fontWeight: 600 }}
+            autoFocus
+          />
+          <input
+            value={edit.note}
+            placeholder="Note (e.g. brand, size)"
+            onChange={(e) => setEdit({ ...edit, note: e.target.value })}
+            style={{ flex: "1 1 60%" }}
+          />
+          <select
+            value={edit.category}
+            onChange={(e) => setEdit({ ...edit, category: e.target.value })}
+            style={{ width: "auto", padding: "8px", fontSize: 13 }}
+          >
+            {AISLES.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+          <div className="spacer" />
+          <button className="btn secondary" onClick={() => setEdit(null)}>
+            Cancel
+          </button>
+          <button className="btn" onClick={saveEdit}>
+            Save
+          </button>
         </div>
-        {!it.checked &&
-          (editing === it.id ? (
-            <select
-              autoFocus
-              value={it.category ?? "Other"}
-              onChange={(e) => setCategory(it, e.target.value)}
-              onBlur={() => setEditing(null)}
-              style={{ marginTop: 4, width: "auto", padding: "4px 6px", fontSize: 12 }}
-            >
-              {AISLES.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <button
-              className="tag"
-              style={{ cursor: "pointer", marginTop: 4 }}
-              onClick={() => setEditing(it.id)}
-              title="Change aisle"
-            >
-              {it.category ?? "Other"} ▾
-            </button>
-          ))}
+      );
+    }
+    return (
+      <div key={it.id} className={`list-item ${it.checked ? "checked" : ""}`}>
+        <button
+          className={`check ${it.checked ? "on" : ""}`}
+          onClick={() => setChecked(it, !it.checked)}
+          aria-label="toggle bought"
+        >
+          {it.checked ? "✓" : ""}
+        </button>
+        <div style={{ minWidth: 0 }}>
+          <div className="name">{it.name}</div>
+          <div className="sub">
+            {it.last_price != null && `€${it.last_price.toFixed(2)} ea`}
+            {it.last_shop ? ` · ${it.last_shop}` : ""}
+            {it.note ? ` · ${it.note}` : ""}
+          </div>
+        </div>
+        <div className="spacer" />
+        <button
+          className="icon"
+          title="Copy name (to paste into Wolt)"
+          onClick={() => copyText(it.name, showToast, "Copied")}
+        >
+          ⧉
+        </button>
+        {!it.checked && (
+          <button
+            className="icon"
+            title="Edit"
+            onClick={() =>
+              setEdit({ id: it.id, name: it.name, note: it.note ?? "", category: it.category ?? "Other" })
+            }
+          >
+            ✎
+          </button>
+        )}
+        <div className="qty">
+          <button onClick={() => setQty(it, it.quantity - 1)}>−</button>
+          <span>{it.quantity}</span>
+          <button onClick={() => setQty(it, it.quantity + 1)}>+</button>
+        </div>
+        <button className="icon" onClick={() => remove(it)} aria-label="remove">
+          ✕
+        </button>
       </div>
-      <div className="spacer" />
-      <div className="qty">
-        <button onClick={() => setQty(it, it.quantity - 1)}>−</button>
-        <span>{it.quantity}</span>
-        <button onClick={() => setQty(it, it.quantity + 1)}>+</button>
-      </div>
-      <button className="icon" onClick={() => remove(it)} aria-label="remove">
-        ✕
-      </button>
-    </div>
-  );
+    );
+  };
 
   return (
     <div>
@@ -240,6 +301,16 @@ export function ShoppingList({
             ))}
           </div>
         )}
+        <div className="row" style={{ marginTop: 10, gap: 8 }}>
+          <button className="btn secondary" onClick={buildWeekly}>
+            ⚡ Build weekly shop
+          </button>
+          {active.length > 0 && (
+            <button className="btn secondary" onClick={copyList}>
+              ⧉ Copy list
+            </button>
+          )}
+        </div>
       </div>
 
       {restock.some((r) => r.status === "due" || r.status === "soon") && (
@@ -250,7 +321,15 @@ export function ShoppingList({
             </h2>
             <div className="spacer" />
             {restock.some((r) => r.status === "due") && (
-              <button className="btn secondary" onClick={addAllDue}>
+              <button
+                className="btn secondary"
+                onClick={async () => {
+                  const due = restock.filter((r) => r.status === "due");
+                  await api.addItemsToList(due.map((r) => ({ name: r.name })));
+                  showToast(`Added ${due.length} restock items`);
+                  await load();
+                }}
+              >
                 Add all due
               </button>
             )}
@@ -265,18 +344,9 @@ export function ShoppingList({
                   className={`tag ${r.status === "due" ? "warn" : ""}`}
                   style={{ cursor: "pointer" }}
                   onClick={() => add(r.name)}
-                  title={
-                    r.avgIntervalDays
-                      ? `Bought ~every ${r.avgIntervalDays}d · last ${r.daysSinceLast}d ago`
-                      : undefined
-                  }
                 >
                   + {r.name}
-                  {r.status === "due"
-                    ? " · due"
-                    : r.dueInDays != null
-                      ? ` · ~${r.dueInDays}d`
-                      : ""}
+                  {r.status === "due" ? " · due" : r.dueInDays != null ? ` · ~${r.dueInDays}d` : ""}
                 </button>
               ))}
           </div>
@@ -290,12 +360,7 @@ export function ShoppingList({
           </h2>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {usual.slice(0, 10).map((s) => (
-              <button
-                key={s.id}
-                className="tag"
-                style={{ cursor: "pointer" }}
-                onClick={() => add(s.name)}
-              >
+              <button key={s.id} className="tag" style={{ cursor: "pointer" }} onClick={() => add(s.name)}>
                 + {s.name}
               </button>
             ))}
@@ -309,7 +374,7 @@ export function ShoppingList({
         <div className="empty">
           Your list is empty.
           <br />
-          Add items above, or reorder from <strong>History</strong>.
+          Add items, hit <strong>Build weekly shop</strong>, or reorder from <strong>Orders</strong>.
         </div>
       ) : (
         <>
@@ -342,6 +407,9 @@ export function ShoppingList({
                 Clear bought
               </button>
             )}
+            <button className="btn danger" onClick={clearAll} style={{ marginLeft: 8 }}>
+              Clear all
+            </button>
           </div>
         </>
       )}
