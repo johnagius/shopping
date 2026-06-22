@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { normalizeName } from "../src/lib/woltParser";
+import { categorize } from "../src/lib/categorize";
 import type { ParsedOrder } from "../src/lib/types";
-import { findShopsForList } from "./wolt";
 
 export interface Env {
   DB: D1Database;
@@ -43,9 +43,9 @@ async function addToList(
 
   const res = await db
     .prepare(
-      "INSERT INTO shopping_list (name, norm_name, quantity, note, catalog_id) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO shopping_list (name, norm_name, quantity, note, catalog_id, category) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .bind(name, norm, quantity, note, catalogId)
+    .bind(name, norm, quantity, note, catalogId, categorize(name))
     .run();
   return res.meta.last_row_id;
 }
@@ -209,17 +209,18 @@ api.post("/orders/import", async (c) => {
       // Upsert into the catalog so the item is reorderable later.
       await db
         .prepare(
-          `INSERT INTO catalog_items (name, norm_name, last_price, last_shop, last_ordered_at, order_count)
-           VALUES (?, ?, ?, ?, ?, 1)
+          `INSERT INTO catalog_items (name, norm_name, category, last_price, last_shop, last_ordered_at, order_count)
+           VALUES (?, ?, ?, ?, ?, ?, 1)
            ON CONFLICT(norm_name) DO UPDATE SET
              name = excluded.name,
+             category = excluded.category,
              last_price = excluded.last_price,
              last_shop = excluded.last_shop,
              last_ordered_at = excluded.last_ordered_at,
              order_count = catalog_items.order_count + 1,
              updated_at = datetime('now')`,
         )
-        .bind(it.name, norm, it.unitPrice, o.shopName, o.placedAt ?? o.deliveredAt)
+        .bind(it.name, norm, categorize(it.name), it.unitPrice, o.shopName, o.placedAt ?? o.deliveredAt)
         .run();
       catalogId = await findCatalogId(db, norm);
     }
@@ -247,12 +248,123 @@ api.post("/orders/import", async (c) => {
   return c.json({ id: orderId, items: o.items.length }, 201);
 });
 
-// ---- Wolt live stock finder (experimental, best-effort) ----
+// ---- "Where to buy": match the list against shops you've ordered from ----
+//
+// Reliable & offline: as you import receipts, each shop's assortment (and the
+// price it charged per item) is learned. This ranks shops by how much of your
+// current list they've historically carried.
 
-api.post("/stock", async (c) => {
-  const body = await c.req.json<{ items: string[]; lat?: number; lon?: number }>();
-  const result = await findShopsForList(body.items ?? [], body.lat, body.lon);
-  return c.json(result);
+api.get("/where-to-buy", async (c) => {
+  const db = c.env.DB;
+
+  // Current unchecked list.
+  const { results: list } = await db
+    .prepare("SELECT name, norm_name, quantity FROM shopping_list WHERE checked = 0")
+    .all<{ name: string; norm_name: string; quantity: number }>();
+
+  if (list.length === 0) {
+    return c.json({ queriedItems: [], shops: [] });
+  }
+  const qtyByNorm = new Map(list.map((l) => [l.norm_name, l.quantity]));
+
+  // Every (shop, item, latest price) we've ever seen.
+  const { results: rows } = await db
+    .prepare(
+      `SELECT o.shop_name AS shop, oi.norm_name AS norm, oi.name AS name,
+              oi.unit_price AS price, o.created_at AS at
+       FROM order_items oi JOIN orders o ON oi.order_id = o.id
+       WHERE oi.is_fee = 0 AND o.shop_name IS NOT NULL`,
+    )
+    .all<{ shop: string; norm: string; name: string; price: number | null; at: string }>();
+
+  // shop -> norm -> { price, at }
+  const shops = new Map<string, Map<string, { price: number | null; at: string }>>();
+  for (const r of rows) {
+    const m = shops.get(r.shop) ?? new Map();
+    const prev = m.get(r.norm);
+    if (!prev || r.at > prev.at) m.set(r.norm, { price: r.price, at: r.at });
+    shops.set(r.shop, m);
+  }
+
+  const listNorms = list.map((l) => l.norm_name);
+  const result = [...shops.entries()]
+    .map(([shop, items]) => {
+      const matched = listNorms.filter((n) => items.has(n));
+      const missing = list.filter((l) => !items.has(l.norm_name)).map((l) => l.name);
+      const estimatedTotal = matched.reduce((sum, n) => {
+        const p = items.get(n)?.price ?? 0;
+        return sum + p * (qtyByNorm.get(n) ?? 1);
+      }, 0);
+      return {
+        venueName: shop,
+        matchedItems: matched,
+        missingItems: missing,
+        coverage: matched.length / listNorms.length,
+        estimatedTotal: estimatedTotal > 0 ? Math.round(estimatedTotal * 100) / 100 : null,
+      };
+    })
+    .sort((a, b) => b.coverage - a.coverage || (a.estimatedTotal ?? 1e9) - (b.estimatedTotal ?? 1e9));
+
+  return c.json({ queriedItems: list.map((l) => l.name), shops: result });
+});
+
+// ---- "You usually buy these" suggestions ----
+
+api.get("/suggestions", async (c) => {
+  const db = c.env.DB;
+  const { results } = await db
+    .prepare(
+      `SELECT c.* FROM catalog_items c
+       WHERE c.norm_name NOT IN (SELECT norm_name FROM shopping_list WHERE checked = 0)
+       ORDER BY c.order_count DESC, c.last_ordered_at DESC
+       LIMIT 12`,
+    )
+    .all();
+  return c.json(results);
+});
+
+// ---- Spending insights ----
+
+api.get("/insights", async (c) => {
+  const db = c.env.DB;
+
+  const totals = await db
+    .prepare(
+      "SELECT COUNT(*) AS orders, COALESCE(SUM(total), 0) AS spend FROM orders",
+    )
+    .first<{ orders: number; spend: number }>();
+
+  const { results: perShop } = await db
+    .prepare(
+      `SELECT shop_name AS shop, COUNT(*) AS orders, COALESCE(SUM(total),0) AS spend
+       FROM orders WHERE shop_name IS NOT NULL
+       GROUP BY shop_name ORDER BY spend DESC`,
+    )
+    .all();
+
+  const { results: topItems } = await db
+    .prepare(
+      `SELECT name, COALESCE(SUM(line_total),0) AS spend, SUM(quantity) AS qty,
+              COUNT(DISTINCT order_id) AS times
+       FROM order_items WHERE is_fee = 0
+       GROUP BY norm_name ORDER BY spend DESC LIMIT 12`,
+    )
+    .all();
+
+  const { results: monthly } = await db
+    .prepare(
+      `SELECT substr(created_at, 1, 7) AS month, COALESCE(SUM(total),0) AS spend, COUNT(*) AS orders
+       FROM orders GROUP BY month ORDER BY month ASC`,
+    )
+    .all();
+
+  return c.json({
+    orders: totals?.orders ?? 0,
+    totalSpend: Math.round((totals?.spend ?? 0) * 100) / 100,
+    perShop,
+    topItems,
+    monthly,
+  });
 });
 
 // ---- App wiring: /api/* -> Hono, everything else -> static assets ----

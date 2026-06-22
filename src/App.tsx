@@ -2,15 +2,17 @@ import { useState, useCallback } from "react";
 import { ShoppingList } from "./components/ShoppingList";
 import { ImportReceipt } from "./components/ImportReceipt";
 import { OrderHistory } from "./components/OrderHistory";
-import { StockFinder } from "./components/StockFinder";
+import { WhereToBuy } from "./components/WhereToBuy";
+import { Insights } from "./components/Insights";
 
-type Tab = "list" | "import" | "history" | "shops";
+type Tab = "list" | "import" | "history" | "shops" | "insights";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "list", label: "🛒 List" },
   { id: "import", label: "📥 Import" },
   { id: "history", label: "🧾 History" },
-  { id: "shops", label: "📍 Find shops" },
+  { id: "shops", label: "📍 Where to buy" },
+  { id: "insights", label: "📊 Insights" },
 ];
 
 export function App() {
@@ -72,7 +74,8 @@ export function App() {
           }}
         />
       )}
-      {tab === "shops" && <StockFinder showToast={showToast} />}
+      {tab === "shops" && <WhereToBuy key={`shops-${refreshKey}`} />}
+      {tab === "insights" && <Insights key={`insights-${refreshKey}`} />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

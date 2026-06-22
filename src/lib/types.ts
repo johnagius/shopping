@@ -21,6 +21,7 @@ export interface ShoppingListItem {
   checked: number; // 0 | 1 (SQLite boolean)
   note: string | null;
   catalog_id: number | null;
+  category: string | null;
   created_at: string;
   // Joined from catalog when available:
   last_price: number | null;
@@ -89,20 +90,27 @@ export interface ParsedOrder {
   rawText: string;
 }
 
-// ---- Wolt live stock finder ----
+// ---- "Where to buy" (matches list against shops you've ordered from) ----
 
-export interface StockShopResult {
+export interface WhereToBuyShop {
   venueName: string;
-  venueSlug: string | null;
   matchedItems: string[];
   missingItems: string[];
   coverage: number; // 0..1
   estimatedTotal: number | null;
 }
 
-export interface StockFinderResponse {
-  status: "ok" | "unavailable" | "partial";
-  message?: string;
+export interface WhereToBuyResponse {
   queriedItems: string[];
-  shops: StockShopResult[];
+  shops: WhereToBuyShop[];
+}
+
+// ---- Spending insights ----
+
+export interface Insights {
+  orders: number;
+  totalSpend: number;
+  perShop: { shop: string; orders: number; spend: number }[];
+  topItems: { name: string; spend: number; qty: number; times: number }[];
+  monthly: { month: string; spend: number; orders: number }[];
 }

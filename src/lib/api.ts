@@ -1,9 +1,10 @@
 import type {
   CatalogItem,
+  Insights,
   Order,
   ParsedOrder,
   ShoppingListItem,
-  StockFinderResponse,
+  WhereToBuyResponse,
 } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -56,10 +57,12 @@ export const api = {
       body: JSON.stringify(order),
     }),
 
-  // Wolt stock finder
-  findShops: (items: string[], lat?: number, lon?: number) =>
-    req<StockFinderResponse>("/stock", {
-      method: "POST",
-      body: JSON.stringify({ items, lat, lon }),
-    }),
+  // Where to buy (import-based shop matcher)
+  whereToBuy: () => req<WhereToBuyResponse>("/where-to-buy"),
+
+  // Suggestions ("you usually buy these")
+  getSuggestions: () => req<CatalogItem[]>("/suggestions"),
+
+  // Spending insights
+  getInsights: () => req<Insights>("/insights"),
 };
