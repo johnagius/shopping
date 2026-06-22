@@ -85,6 +85,23 @@ function resolveCollisions(
   }
 }
 
+/** True if any two rects still overlap (with a small tolerance gap). */
+function hasOverlap(rects: Rect[], gap = 4): boolean {
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i];
+      const b = rects[j];
+      if (
+        Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap &&
+        Math.abs(a.y - b.y) < (a.h + b.h) / 2 + gap
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 type Node = {
   item: CatalogItem;
   x: number;
@@ -176,24 +193,39 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
     };
 
     if (openCat === null) {
-      // Collapsed: hub + category ring, sized to the canvas.
+      // Collapsed: hub + category ring. Shrink font until the ring is overlap-free.
       const A = ordered.length || 1;
       const R = Math.min(w, h) * 0.38;
-      const font = clamp(Math.sqrt((w * h) / Math.max(8, A)) * 0.16, 12, 26);
       const cx = w / 2;
       const cy = h / 2;
-      const aisles: AisleNode[] = ordered.map(([cat], i) => {
-        const ang = -Math.PI / 2 + (2 * Math.PI * i) / A;
-        const p = sizePill([cat], font);
-        return { cat, x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, w: p.w, h: p.h };
-      });
-      const hubR = font * 1.6;
-      resolveCollisions(
-        aisles,
-        { minX: 8, minY: 8, maxX: w - 8, maxY: h - 8 },
-        [{ x: cx, y: cy, w: hubR * 2 + 16, h: hubR * 2 + 16 }],
-      );
-      return { mode: "collapsed" as const, aisles, nodes: [] as Node[], anchor: null, font, hub: { cx, cy } };
+      const startFont = clamp(Math.sqrt((w * h) / Math.max(8, A)) * 0.16, 12, 28);
+      let chosen: { aisles: AisleNode[]; font: number } | null = null;
+      for (let step = 0; step < 14; step++) {
+        const font = Math.max(9, startFont * Math.pow(0.9, step));
+        const aisles: AisleNode[] = ordered.map(([cat], i) => {
+          const ang = -Math.PI / 2 + (2 * Math.PI * i) / A;
+          const p = sizePill([cat], font);
+          return { cat, x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, w: p.w, h: p.h };
+        });
+        const hubR = font * 1.6;
+        resolveCollisions(
+          aisles,
+          { minX: 8, minY: 8, maxX: w - 8, maxY: h - 8 },
+          [{ x: cx, y: cy, w: hubR * 2 + 16, h: hubR * 2 + 16 }],
+          200,
+          12,
+        );
+        chosen = { aisles, font };
+        if (!hasOverlap(aisles, 6)) break;
+      }
+      return {
+        mode: "collapsed" as const,
+        aisles: chosen!.aisles,
+        nodes: [] as Node[],
+        anchor: null,
+        font: chosen!.font,
+        hub: { cx, cy },
+      };
     }
 
     // Expanded: bottom-left category + items filling the rectangle.
@@ -202,49 +234,72 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
     const pad = 26;
     const area = (w - 2 * pad) * (h - 2 * pad) * 0.82;
     const cell = Math.sqrt(area / n);
-    const font = clamp(cell * 0.3, 9, 30);
-    const maxChars = clamp(Math.round(cell / (font * 0.6)), 8, 22);
+    const startFont = clamp(cell * 0.34, 9, 32);
 
-    // Normalised quarter-fan coords in [0,1], then stretch to the box.
     const A0 = (6 * Math.PI) / 180;
     const A1 = (84 * Math.PI) / 180;
     const r0n = 0.16;
     const drn = 0.13;
     const SPn = 0.16; // normalised chord spacing
-    const raw: { fx: number; fy: number; it: CatalogItem }[] = [];
-    let placed = 0;
-    let ring = 0;
-    while (placed < n) {
-      const r = r0n + ring * drn;
-      const cap = Math.max(1, Math.floor(((A1 - A0) * r) / SPn));
-      const take = Math.min(cap, n - placed);
-      for (let j = 0; j < take; j++) {
-        const a = take === 1 ? (A0 + A1) / 2 : A0 + ((A1 - A0) * j) / (take - 1);
-        raw.push({ fx: r * Math.cos(a), fy: r * Math.sin(a), it: list[placed + j] });
+
+    const buildExpanded = (font: number) => {
+      const maxChars = clamp(Math.round((cell * 1.4) / (font * 0.6)), 10, 24);
+      const raw: { fx: number; fy: number; it: CatalogItem }[] = [];
+      let placed = 0;
+      let ring = 0;
+      while (placed < n) {
+        const r = r0n + ring * drn;
+        const cap = Math.max(1, Math.floor(((A1 - A0) * r) / SPn));
+        const take = Math.min(cap, n - placed);
+        for (let j = 0; j < take; j++) {
+          const a = take === 1 ? (A0 + A1) / 2 : A0 + ((A1 - A0) * j) / (take - 1);
+          raw.push({ fx: r * Math.cos(a), fy: r * Math.sin(a), it: list[placed + j] });
+        }
+        placed += take;
+        ring++;
       }
-      placed += take;
-      ring++;
-    }
-    // Normalise to [0,1] then map to the box (anchor at bottom-left).
-    const maxF = Math.max(...raw.map((p) => Math.max(p.fx, p.fy)), 0.001);
-    const nodes: Node[] = raw.map(({ fx, fy, it }) => {
-      const lines = wrapLabel(it.short_name || it.name, maxChars);
-      const p = sizePill(lines, font);
-      return {
-        item: it,
-        x: pad + (fx / maxF) * (w - 2 * pad),
-        y: h - pad - (fy / maxF) * (h - 2 * pad),
-        w: p.w,
-        h: p.h,
-        lines,
+      const maxF = Math.max(...raw.map((p) => Math.max(p.fx, p.fy)), 0.001);
+      const nodes: Node[] = raw.map(({ fx, fy, it }) => {
+        const lines = wrapLabel(it.short_name || it.name, maxChars);
+        const p = sizePill(lines, font);
+        return {
+          item: it,
+          x: pad + (fx / maxF) * (w - 2 * pad),
+          y: h - pad - (fy / maxF) * (h - 2 * pad),
+          w: p.w,
+          h: p.h,
+          lines,
+        };
+      });
+      const ap = sizePill([openCat], clamp(font * 1.05, 11, 26));
+      const anchor: AisleNode = {
+        cat: openCat,
+        x: pad + ap.w / 2,
+        y: h - pad - ap.h / 2,
+        w: ap.w,
+        h: ap.h,
       };
-    });
-    const ap = sizePill([openCat], clamp(font * 1.05, 11, 26));
-    const anchor: AisleNode = { cat: openCat, x: pad + ap.w / 2, y: h - pad - ap.h / 2, w: ap.w, h: ap.h };
+      resolveCollisions(nodes, { minX: pad, minY: pad, maxX: w - pad, maxY: h - pad }, [anchor], 220, 12);
+      return { nodes, anchor };
+    };
 
-    resolveCollisions(nodes, { minX: pad, minY: pad, maxX: w - pad, maxY: h - pad }, [anchor]);
+    // Shrink the font until packing is overlap-free; keep the largest that fits.
+    let result = buildExpanded(startFont);
+    let font = startFont;
+    for (let step = 0; step < 14; step++) {
+      font = Math.max(9, startFont * Math.pow(0.88, step));
+      result = buildExpanded(font);
+      if (!hasOverlap(result.nodes, 6)) break;
+    }
 
-    return { mode: "expanded" as const, aisles: [] as AisleNode[], nodes, anchor, font, hub: { cx: 0, cy: 0 } };
+    return {
+      mode: "expanded" as const,
+      aisles: [] as AisleNode[],
+      nodes: result.nodes,
+      anchor: result.anchor,
+      font,
+      hub: { cx: 0, cy: 0 },
+    };
   }, [items, orderOf, openCat, size]);
 
   const { mode, aisles, nodes, anchor, font, hub } = layout;
