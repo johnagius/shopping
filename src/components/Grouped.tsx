@@ -18,6 +18,8 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [tierFilter, setTierFilter] = useState<string>("all");
+  const [cheapestOnly, setCheapestOnly] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [openCat, setOpenCat] = useState<string | null>(null); // accordion: one open at a time
   const { orderOf } = useCategories();
 
@@ -42,7 +44,20 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
 
   const filtered = items
     .filter((i) => i.name.toLowerCase().includes(q.trim().toLowerCase()))
-    .filter((i) => tierFilter === "all" || (i.tier ?? "One off") === tierFilter);
+    .filter((i) => tierFilter === "all" || (i.tier ?? "One off") === tierFilter)
+    .filter((i) => !cheapestOnly || i.is_cheapest);
+
+  const toggleSel = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const copySelected = () => {
+    const names = items.filter((i) => selected.has(i.id)).map((i) => i.name);
+    if (names.length) copyText(names.join("\n"), showToast);
+  };
 
   const groups = new Map<string, CatalogItem[]>();
   for (const it of filtered) {
@@ -66,6 +81,13 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
               {t === "all" ? "All" : TIER_LABELS[t]}
             </button>
           ))}
+          <button
+            className={`tag ${cheapestOnly ? "ok" : ""}`}
+            style={{ cursor: "pointer", color: cheapestOnly ? undefined : "#f0b429" }}
+            onClick={() => setCheapestOnly((v) => !v)}
+          >
+            ★ Cheapest only
+          </button>
         </div>
       </div>
 
@@ -112,6 +134,14 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
                     .map((it) => (
                       <div key={it.id} className="list-item">
                         <button
+                          className={`check ${selected.has(it.id) ? "on" : ""}`}
+                          onClick={() => toggleSel(it.id)}
+                          aria-label="select"
+                          style={{ width: 22, height: 22, flex: "0 0 auto" }}
+                        >
+                          {selected.has(it.id) ? "✓" : ""}
+                        </button>
+                        <button
                           className="icon"
                           title={it.is_cheapest ? "Cheapest — unstar" : "Mark as cheapest"}
                           onClick={() => toggleStar(it)}
@@ -146,6 +176,22 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
             </div>
           );
         })
+      )}
+
+      {selected.size > 0 && (
+        <div className="toast" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span>{selected.size} selected</span>
+          <button className="btn" style={{ padding: "8px 12px" }} onClick={copySelected}>
+            ⧉ Copy
+          </button>
+          <button
+            className="btn secondary"
+            style={{ padding: "8px 12px" }}
+            onClick={() => setSelected(new Set())}
+          >
+            Clear
+          </button>
+        </div>
       )}
     </div>
   );

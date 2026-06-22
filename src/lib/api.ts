@@ -65,10 +65,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ids }),
     }),
-  bulkUpdateCatalog: (ids: number[], patch: { category?: string; tier?: string }) =>
+  bulkUpdateCatalog: (
+    ids: number[],
+    patch: { category?: string; tier?: string; is_cheapest?: boolean },
+  ) =>
     req<{ updated: number }>("/catalog/bulk-update", {
       method: "POST",
       body: JSON.stringify({ ids, ...patch }),
+    }),
+  createCatalogItem: (item: {
+    name: string;
+    category?: string;
+    tier?: string;
+    last_price?: number | null;
+  }) => req<CatalogItem>("/catalog", { method: "POST", body: JSON.stringify(item) }),
+  mergeCatalog: (primaryId: number, ids: number[]) =>
+    req<{ merged: number; primaryId: number }>("/catalog/merge", {
+      method: "POST",
+      body: JSON.stringify({ primaryId, ids }),
     }),
 
   // Orders

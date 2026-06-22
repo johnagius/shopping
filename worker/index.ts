@@ -258,6 +258,10 @@ api.patch("/catalog/:id", async (c) => {
     sets.push("is_cheapest = ?");
     vals.push(body.is_cheapest ? 1 : 0);
   }
+  // Classifying an item (tier or aisle) marks it reviewed.
+  if (body.tier !== undefined || body.category !== undefined) {
+    sets.push("reviewed = 1");
+  }
   if (sets.length === 0) return c.json({ ok: true });
   sets.push("updated_at = datetime('now')");
   vals.push(id);
@@ -299,27 +303,82 @@ api.post("/catalog/bulk-delete", async (c) => {
 
 api.post("/catalog/bulk-update", async (c) => {
   const db = c.env.DB;
-  const { ids, category, tier } = await c.req.json<{
+  const { ids, category, tier, is_cheapest } = await c.req.json<{
     ids: number[];
     category?: string;
     tier?: string;
+    is_cheapest?: boolean;
   }>();
   const list = (ids ?? []).filter((n) => Number.isFinite(n));
   if (list.length === 0) return c.json({ updated: 0 });
   const ph = list.map(() => "?").join(",");
+  // Setting tier/aisle also marks the items reviewed.
   if (category !== undefined) {
     await db
-      .prepare(`UPDATE catalog_items SET category = ?, updated_at = datetime('now') WHERE id IN (${ph})`)
+      .prepare(`UPDATE catalog_items SET category = ?, reviewed = 1, updated_at = datetime('now') WHERE id IN (${ph})`)
       .bind(category, ...list)
       .run();
   }
   if (tier !== undefined) {
     await db
-      .prepare(`UPDATE catalog_items SET tier = ?, updated_at = datetime('now') WHERE id IN (${ph})`)
+      .prepare(`UPDATE catalog_items SET tier = ?, reviewed = 1, updated_at = datetime('now') WHERE id IN (${ph})`)
       .bind(tier, ...list)
       .run();
   }
+  if (is_cheapest !== undefined) {
+    await db
+      .prepare(`UPDATE catalog_items SET is_cheapest = ?, updated_at = datetime('now') WHERE id IN (${ph})`)
+      .bind(is_cheapest ? 1 : 0, ...list)
+      .run();
+  }
   return c.json({ updated: list.length });
+});
+
+// Manually add an item to the catalog (no receipt needed).
+api.post("/catalog", async (c) => {
+  const db = c.env.DB;
+  const body = await c.req.json<{
+    name: string;
+    category?: string;
+    tier?: string;
+    last_price?: number | null;
+  }>();
+  const name = body.name?.trim();
+  if (!name) return c.json({ error: "name required" }, 400);
+  const norm = normalizeName(name);
+  await db
+    .prepare(
+      `INSERT INTO catalog_items (name, norm_name, category, tier, last_price, reviewed, order_count)
+       VALUES (?, ?, ?, ?, ?, 1, 0)
+       ON CONFLICT(norm_name) DO NOTHING`,
+    )
+    .bind(name, norm, body.category ?? categorize(name), body.tier ?? "One off", body.last_price ?? null)
+    .run();
+  const row = await db.prepare("SELECT * FROM catalog_items WHERE norm_name = ?").bind(norm).first();
+  return c.json(row, 201);
+});
+
+// Merge duplicate catalog items into a single primary item.
+api.post("/catalog/merge", async (c) => {
+  const db = c.env.DB;
+  const { primaryId, ids } = await c.req.json<{ primaryId: number; ids: number[] }>();
+  const primary = await db
+    .prepare("SELECT id, norm_name FROM catalog_items WHERE id = ?")
+    .bind(primaryId)
+    .first<{ id: number; norm_name: string }>();
+  if (!primary) return c.json({ error: "primary not found" }, 404);
+
+  const mergeIds = (ids ?? []).filter((n) => Number.isFinite(n) && n !== primaryId);
+  for (const mid of mergeIds) {
+    // Repoint this item's order history onto the primary, then drop it.
+    await db
+      .prepare("UPDATE order_items SET norm_name = ?, catalog_id = ? WHERE catalog_id = ?")
+      .bind(primary.norm_name, primary.id, mid)
+      .run();
+    await db.prepare("DELETE FROM catalog_items WHERE id = ?").bind(mid).run();
+  }
+  await recomputeCatalog(db, primary.norm_name);
+  return c.json({ merged: mergeIds.length, primaryId: primary.id });
 });
 
 // ---- Categories (aisles) ----

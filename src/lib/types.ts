@@ -7,6 +7,7 @@ export interface CatalogItem {
   category: string | null;
   tier: string | null;
   is_cheapest: number; // 0 | 1 — starred as cheapest place to buy
+  reviewed: number; // 0 | 1 — classified since import
   last_price: number | null;
   last_shop: string | null;
   last_ordered_at: string | null;

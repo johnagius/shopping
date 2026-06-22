@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { api } from "../lib/api";
 import { useCategories, ADD_CATEGORY_VALUE } from "../lib/useCategories";
 import { TIERS, TIER_LABELS, tierOrder } from "../lib/tiers";
+import { QuickClassify } from "./QuickClassify";
 import type { CatalogItem } from "../lib/types";
 
 type SortKey = "added" | "name" | "tier" | "aisle" | "price" | "used";
@@ -196,6 +197,10 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("added");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [reviewOnly, setReviewOnly] = useState(false);
+  const [classifying, setClassifying] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [newItem, setNewItem] = useState({ name: "", tier: "One off", category: "Other", price: "" });
   const { categories, addNew } = useCategories();
 
   const load = useCallback(async () => {
@@ -245,9 +250,11 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
     }
   };
 
+  const needsReview = items.filter((i) => !i.reviewed);
   const filtered = items
     .filter((i) => i.name.toLowerCase().includes(q.trim().toLowerCase()))
     .filter((i) => tierFilter === "all" || (i.tier ?? "One off") === tierFilter)
+    .filter((i) => !reviewOnly || !i.reviewed)
     .sort((a, b) => (sortDir === "asc" ? cmp(a, b) : -cmp(a, b)));
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
@@ -268,11 +275,44 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
     await load();
   };
 
-  const bulkSet = async (patch: { category?: string; tier?: string }) => {
+  const bulkSet = async (patch: { category?: string; tier?: string; is_cheapest?: boolean }) => {
     const ids = [...selected];
     if (ids.length === 0) return;
     await api.bulkUpdateCatalog(ids, patch);
     showToast(`Updated ${ids.length}`);
+    await load();
+  };
+
+  const mergeSelected = async () => {
+    const chosen = items.filter((i) => selected.has(i.id));
+    if (chosen.length < 2) return;
+    // Keep the most-used item as the primary.
+    const primary = chosen.reduce((a, b) => (b.order_count > a.order_count ? b : a));
+    const others = chosen.filter((i) => i.id !== primary.id);
+    if (
+      !window.confirm(
+        `Merge ${others.length} item${others.length === 1 ? "" : "s"} into "${primary.name}"? ` +
+          `Their order history combines and the others are deleted.`,
+      )
+    )
+      return;
+    await api.mergeCatalog(primary.id, others.map((i) => i.id));
+    showToast(`Merged into ${primary.name}`);
+    await load();
+  };
+
+  const addItem = async () => {
+    const name = newItem.name.trim();
+    if (!name) return;
+    await api.createCatalogItem({
+      name,
+      tier: newItem.tier,
+      category: newItem.category,
+      last_price: newItem.price === "" ? null : Number(newItem.price),
+    });
+    showToast(`Added ${name}`);
+    setNewItem({ name: "", tier: "One off", category: "Other", price: "" });
+    setAdding(false);
     await load();
   };
 
@@ -290,12 +330,78 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
   return (
     <div>
       <div className="card">
-        <div className="row">
+        <div className="row" style={{ gap: 8 }}>
           <h2 className="section" style={{ margin: 0 }}>
             Inventory ({items.length})
           </h2>
+          <div className="spacer" />
+          {needsReview.length > 0 && (
+            <button className="btn" style={{ padding: "8px 12px" }} onClick={() => setClassifying(true)}>
+              ⚡ Quick classify ({needsReview.length})
+            </button>
+          )}
+          <button
+            className="btn secondary"
+            style={{ padding: "8px 12px" }}
+            onClick={() => setAdding((v) => !v)}
+          >
+            + Add item
+          </button>
         </div>
-        <input placeholder="Search inventory…" value={q} onChange={(e) => setQ(e.target.value)} />
+
+        {adding && (
+          <div className="row" style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
+            <input
+              placeholder="Item name"
+              value={newItem.name}
+              onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && addItem()}
+              autoFocus
+              style={{ flex: "1 1 160px" }}
+            />
+            <select
+              value={newItem.tier}
+              onChange={(e) => setNewItem({ ...newItem, tier: e.target.value })}
+              style={{ width: "auto", padding: "8px" }}
+            >
+              {TIERS.map((t) => (
+                <option key={t} value={t}>
+                  {TIER_LABELS[t]}
+                </option>
+              ))}
+            </select>
+            <select
+              value={newItem.category}
+              onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
+              style={{ width: "auto", padding: "8px" }}
+            >
+              {categories.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+            <div style={{ position: "relative", width: 80 }}>
+              <span style={{ position: "absolute", left: 8, top: 9, color: "var(--muted)" }}>€</span>
+              <input
+                value={newItem.price}
+                inputMode="decimal"
+                onChange={(e) => setNewItem({ ...newItem, price: e.target.value })}
+                style={{ paddingLeft: 18 }}
+              />
+            </div>
+            <button className="btn" onClick={addItem}>
+              Add
+            </button>
+          </div>
+        )}
+
+        <input
+          placeholder="Search inventory…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          style={{ marginTop: 8 }}
+        />
 
         <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
           <span className="muted" style={{ fontSize: 11 }}>Tier:</span>
@@ -309,6 +415,13 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
               {t === "all" ? "All" : TIER_LABELS[t]}
             </button>
           ))}
+          <button
+            className={`tag ${reviewOnly ? "warn" : ""}`}
+            style={{ cursor: "pointer" }}
+            onClick={() => setReviewOnly((v) => !v)}
+          >
+            Needs review ({needsReview.length})
+          </button>
         </div>
 
         <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -352,6 +465,17 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
                     </option>
                   ))}
                 </select>
+                <button className="btn secondary" onClick={() => bulkSet({ is_cheapest: true })} title="Star as cheapest">
+                  ★
+                </button>
+                <button className="btn secondary" onClick={() => bulkSet({ is_cheapest: false })} title="Unstar">
+                  ☆
+                </button>
+                {selected.size >= 2 && (
+                  <button className="btn secondary" onClick={mergeSelected}>
+                    Merge
+                  </button>
+                )}
                 <div className="spacer" />
                 <button className="btn danger" onClick={bulkDelete}>
                   Delete {selected.size}
@@ -361,6 +485,18 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
           </div>
         )}
       </div>
+
+      {classifying && (
+        <QuickClassify
+          items={needsReview}
+          showToast={showToast}
+          onClose={() => setClassifying(false)}
+          onDone={async () => {
+            setClassifying(false);
+            await load();
+          }}
+        />
+      )}
 
       {loading ? (
         <div className="empty">Loading…</div>
