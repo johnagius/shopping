@@ -159,9 +159,20 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
                             {it.last_price != null ? `€${it.last_price.toFixed(2)}` : ""}
                             {it.tier ? ` · ${TIER_LABELS[it.tier] ?? it.tier}` : ""}
                             {it.last_shop ? ` · ${it.last_shop}` : ""}
+                            {it.short_name ? ` · “${it.short_name}”` : ""}
                           </div>
                         </div>
                         <div className="spacer" />
+                        {it.short_name && (
+                          <button
+                            className="tag"
+                            title={`Copy generic: ${it.short_name}`}
+                            style={{ cursor: "pointer" }}
+                            onClick={() => copyText(it.short_name!, showToast)}
+                          >
+                            ⧉ generic
+                          </button>
+                        )}
                         <button
                           className="icon"
                           title="Copy name"

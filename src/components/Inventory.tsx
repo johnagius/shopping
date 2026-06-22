@@ -41,13 +41,14 @@ function InventoryRow({
   onToggleSelect: () => void;
 }) {
   const [name, setName] = useState(item.name);
+  const [shortName, setShortName] = useState(item.short_name ?? "");
   const [category, setCategory] = useState(item.category ?? "Other");
   const [tier, setTier] = useState(item.tier ?? "One off");
   const [price, setPrice] = useState(item.last_price != null ? String(item.last_price) : "");
   const [star, setStar] = useState(!!item.is_cheapest);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const orig = useRef({ name: item.name, price });
+  const orig = useRef({ name: item.name, price, short: item.short_name ?? "" });
 
   const flash = () => {
     setSaved(true);
@@ -116,6 +117,18 @@ function InventoryRow({
           }
         }}
         style={{ flex: "1 1 140px", minWidth: 0, padding: "6px 8px", fontSize: 13 }}
+      />
+      <input
+        value={shortName}
+        placeholder="short name"
+        onChange={(e) => setShortName(e.target.value)}
+        onBlur={() => {
+          if (shortName !== orig.current.short) {
+            orig.current.short = shortName;
+            void save({ short_name: shortName });
+          }
+        }}
+        style={{ flex: "1 1 100px", minWidth: 0, padding: "6px 8px", fontSize: 12, color: "var(--muted)" }}
       />
       <select
         value={tier}

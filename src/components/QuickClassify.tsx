@@ -22,6 +22,7 @@ export function QuickClassify({
 }) {
   const [idx, setIdx] = useState(0);
   const [category, setCategory] = useState("Other");
+  const [shortName, setShortName] = useState("");
   const [star, setStar] = useState(false);
   const [busy, setBusy] = useState(false);
   const { categories, addNew } = useCategories();
@@ -32,6 +33,7 @@ export function QuickClassify({
   useEffect(() => {
     if (item) {
       setCategory(item.category ?? "Other");
+      setShortName(item.short_name ?? "");
       setStar(!!item.is_cheapest);
     }
   }, [item]);
@@ -48,7 +50,7 @@ export function QuickClassify({
     if (!item) return;
     setBusy(true);
     try {
-      await api.updateCatalogItem(item.id, { tier, category, is_cheapest: star });
+      await api.updateCatalogItem(item.id, { tier, category, is_cheapest: star, short_name: shortName });
       advance();
     } catch (e) {
       showToast((e as Error).message);
@@ -89,6 +91,14 @@ export function QuickClassify({
           {item.last_price != null ? `€${item.last_price.toFixed(2)}` : "no price"}
           {item.last_shop ? ` · ${item.last_shop}` : ""}
         </div>
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <input
+          value={shortName}
+          placeholder="Short / generic name (optional, e.g. Greek Yoghurt)"
+          onChange={(e) => setShortName(e.target.value)}
+        />
       </div>
 
       <div className="row" style={{ gap: 8, justifyContent: "center", marginBottom: 12 }}>

@@ -222,6 +222,7 @@ api.patch("/catalog/:id", async (c) => {
   const id = Number(c.req.param("id"));
   const body = await c.req.json<{
     name?: string;
+    short_name?: string | null;
     category?: string;
     last_price?: number | null;
     tier?: string;
@@ -241,6 +242,10 @@ api.patch("/catalog/:id", async (c) => {
     newNorm = normalizeName(body.name);
     sets.push("name = ?", "norm_name = ?");
     vals.push(body.name.trim(), newNorm);
+  }
+  if (body.short_name !== undefined) {
+    sets.push("short_name = ?");
+    vals.push(body.short_name?.trim() || null);
   }
   if (body.category !== undefined) {
     sets.push("category = ?");

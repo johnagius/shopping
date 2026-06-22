@@ -53,6 +53,7 @@ export const api = {
     id: number,
     patch: {
       name?: string;
+      short_name?: string | null;
       category?: string;
       last_price?: number | null;
       tier?: string;

@@ -359,3 +359,26 @@ a {
 .chip .star {
   color: #f0b429;
 }
+
+.chip-short {
+  margin-top: 4px;
+  align-self: stretch;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.chip-short:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip.added .chip-short {
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #eafff5;
+  background: rgba(255, 255, 255, 0.12);
+}

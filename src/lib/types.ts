@@ -3,6 +3,7 @@
 export interface CatalogItem {
   id: number;
   name: string;
+  short_name: string | null;
   norm_name: string;
   category: string | null;
   tier: string | null;

@@ -63,6 +63,23 @@ export function OrderBoard({ showToast }: { showToast: (m: string) => void }) {
     }
   };
 
+  const copyShort = async (e: React.MouseEvent, it: CatalogItem) => {
+    e.stopPropagation();
+    if (!it.short_name) return;
+    setMarked((prev) => new Set(prev).add(it.id));
+    try {
+      await navigator.clipboard.writeText(it.short_name);
+      showToast(`Copied: ${it.short_name}`);
+    } catch {
+      showToast("Marked (copy blocked)");
+    }
+    try {
+      await api.toggleBoardMark(it.id, true);
+    } catch {
+      /* keep optimistic */
+    }
+  };
+
   const reset = async () => {
     if (marked.size === 0) return;
     if (!window.confirm(`Reset ${marked.size} marked item${marked.size === 1 ? "" : "s"}?`)) return;
@@ -177,6 +194,15 @@ export function OrderBoard({ showToast }: { showToast: (m: string) => void }) {
                           {badge}
                           {badge && it.last_price != null ? " · " : ""}
                           {it.last_price != null ? `€${it.last_price.toFixed(2)}` : ""}
+                        </span>
+                      )}
+                      {it.short_name && (
+                        <span
+                          className="chip-short"
+                          title={`Copy generic: ${it.short_name}`}
+                          onClick={(e) => copyShort(e, it)}
+                        >
+                          ⧉ {it.short_name}
                         </span>
                       )}
                     </button>
