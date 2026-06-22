@@ -10,12 +10,16 @@ function InventoryRow({
   addCategory,
   onDeleted,
   showToast,
+  selected,
+  onToggleSelect,
 }: {
   item: CatalogItem;
   categories: string[];
   addCategory: () => Promise<string | null>;
   onDeleted: () => void;
   showToast: (m: string) => void;
+  selected: boolean;
+  onToggleSelect: () => void;
 }) {
   const [name, setName] = useState(item.name);
   const [category, setCategory] = useState(item.category ?? "Other");
@@ -61,6 +65,14 @@ function InventoryRow({
         opacity: busy ? 0.5 : 1,
       }}
     >
+      <button
+        className={`check ${selected ? "on" : ""}`}
+        onClick={onToggleSelect}
+        aria-label="select"
+        style={{ width: 20, height: 20, fontSize: 12, flex: "0 0 auto" }}
+      >
+        {selected ? "✓" : ""}
+      </button>
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -141,16 +153,25 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [tierFilter, setTierFilter] = useState<string>("all");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const { categories, addNew } = useCategories();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       setItems(await api.getCatalog());
+      setSelected(new Set());
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const toggleSelect = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     void load();
@@ -163,6 +184,24 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
       (a, b) =>
         tierOrder(a.tier) - tierOrder(b.tier) || a.name.localeCompare(b.name),
     );
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
+  const toggleSelectAll = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allFilteredSelected) filtered.forEach((i) => next.delete(i.id));
+      else filtered.forEach((i) => next.add(i.id));
+      return next;
+    });
+
+  const bulkDelete = async () => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} item${ids.length === 1 ? "" : "s"} from inventory?`)) return;
+    const { deleted } = await api.bulkDeleteCatalog(ids);
+    showToast(`Deleted ${deleted} item${deleted === 1 ? "" : "s"}`);
+    await load();
+  };
 
   return (
     <div>
@@ -190,6 +229,19 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
             </button>
           ))}
         </div>
+        {filtered.length > 0 && (
+          <div className="row" style={{ marginTop: 10, gap: 8 }}>
+            <button className="btn secondary" onClick={toggleSelectAll}>
+              {allFilteredSelected ? "Deselect all" : `Select all (${filtered.length})`}
+            </button>
+            <div className="spacer" />
+            {selected.size > 0 && (
+              <button className="btn danger" onClick={bulkDelete}>
+                Delete {selected.size} selected
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -210,6 +262,8 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
               addCategory={addNew}
               onDeleted={load}
               showToast={showToast}
+              selected={selected.has(it.id)}
+              onToggleSelect={() => toggleSelect(it.id)}
             />
           ))}
         </div>

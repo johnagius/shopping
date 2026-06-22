@@ -281,6 +281,17 @@ api.delete("/catalog/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+api.post("/catalog/bulk-delete", async (c) => {
+  const { ids } = await c.req.json<{ ids: number[] }>();
+  const list = (ids ?? []).filter((n) => Number.isFinite(n));
+  if (list.length === 0) return c.json({ deleted: 0 });
+  const placeholders = list.map(() => "?").join(",");
+  await c.env.DB.prepare(`DELETE FROM catalog_items WHERE id IN (${placeholders})`)
+    .bind(...list)
+    .run();
+  return c.json({ deleted: list.length });
+});
+
 // ---- Categories (aisles) ----
 
 api.get("/categories", async (c) => {

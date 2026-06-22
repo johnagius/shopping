@@ -55,6 +55,11 @@ export const api = {
   ) => req<{ ok: true }>(`/catalog/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCatalogItem: (id: number) =>
     req<{ ok: true }>(`/catalog/${id}`, { method: "DELETE" }),
+  bulkDeleteCatalog: (ids: number[]) =>
+    req<{ deleted: number }>("/catalog/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
 
   // Orders
   getOrders: () => req<(Order & { item_count: number })[]>("/orders"),
