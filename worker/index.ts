@@ -794,6 +794,56 @@ api.get("/insights", async (c) => {
   });
 });
 
+// ---- Order board (tap-to-copy ordering surface) ----
+
+// Which shop is cheapest for each item, and which shops carry it (from history).
+api.get("/item-shops", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT oi.norm_name AS norm, o.shop_name AS shop, oi.unit_price AS price
+     FROM order_items oi JOIN orders o ON oi.order_id = o.id
+     WHERE oi.is_fee = 0 AND o.shop_name IS NOT NULL`,
+  ).all<{ norm: string; shop: string; price: number | null }>();
+
+  const map: Record<
+    string,
+    { cheapestShop: string | null; cheapestPrice: number | null; shops: string[] }
+  > = {};
+  for (const r of results) {
+    const e = (map[r.norm] ??= { cheapestShop: null, cheapestPrice: null, shops: [] });
+    if (!e.shops.includes(r.shop)) e.shops.push(r.shop);
+    if (r.price != null && (e.cheapestPrice == null || r.price < e.cheapestPrice)) {
+      e.cheapestPrice = r.price;
+      e.cheapestShop = r.shop;
+    }
+  }
+  return c.json(map);
+});
+
+api.get("/board-state", async (c) => {
+  const { results } = await c.env.DB.prepare("SELECT catalog_id FROM board_marks").all<{
+    catalog_id: number;
+  }>();
+  return c.json({ marked: results.map((r) => r.catalog_id) });
+});
+
+api.post("/board-state/toggle", async (c) => {
+  const { catalogId, marked } = await c.req.json<{ catalogId: number; marked: boolean }>();
+  if (!Number.isFinite(catalogId)) return c.json({ error: "catalogId required" }, 400);
+  if (marked) {
+    await c.env.DB.prepare("INSERT OR IGNORE INTO board_marks (catalog_id) VALUES (?)")
+      .bind(catalogId)
+      .run();
+  } else {
+    await c.env.DB.prepare("DELETE FROM board_marks WHERE catalog_id = ?").bind(catalogId).run();
+  }
+  return c.json({ ok: true });
+});
+
+api.post("/board-state/reset", async (c) => {
+  const res = await c.env.DB.prepare("DELETE FROM board_marks").run();
+  return c.json({ cleared: res.meta.changes ?? 0 });
+});
+
 // ---- App wiring: /api/* -> Hono, everything else -> static assets ----
 
 const app = new Hono<{ Bindings: Env }>();

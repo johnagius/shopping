@@ -2,6 +2,7 @@ import type {
   CatalogItem,
   Category,
   Insights,
+  ItemShops,
   Order,
   ParsedOrder,
   RestockItem,
@@ -109,6 +110,16 @@ export const api = {
 
   // Spending insights
   getInsights: () => req<Insights>("/insights"),
+
+  // Order board
+  getItemShops: () => req<ItemShops>("/item-shops"),
+  getBoardState: () => req<{ marked: number[] }>("/board-state"),
+  toggleBoardMark: (catalogId: number, marked: boolean) =>
+    req<{ ok: true }>("/board-state/toggle", {
+      method: "POST",
+      body: JSON.stringify({ catalogId, marked }),
+    }),
+  resetBoard: () => req<{ cleared: number }>("/board-state/reset", { method: "POST" }),
 
   // Categories (aisles)
   getCategories: () => req<Category[]>("/categories"),

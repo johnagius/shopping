@@ -133,6 +133,13 @@ export interface RestockItem {
   status: "due" | "soon" | "ok";
 }
 
+// ---- Order board ----
+
+export type ItemShops = Record<
+  string,
+  { cheapestShop: string | null; cheapestPrice: number | null; shops: string[] }
+>;
+
 // ---- Spending insights ----
 
 export interface Insights {

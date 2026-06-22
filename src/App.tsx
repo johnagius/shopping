@@ -4,10 +4,12 @@ import { OrderHistory } from "./components/OrderHistory";
 import { Insights } from "./components/Insights";
 import { Inventory } from "./components/Inventory";
 import { Grouped } from "./components/Grouped";
+import { OrderBoard } from "./components/OrderBoard";
 
-type Tab = "grouped" | "import" | "history" | "insights" | "inventory";
+type Tab = "board" | "grouped" | "import" | "history" | "insights" | "inventory";
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: "board", label: "🛒 Order" },
   { id: "grouped", label: "🗂️ Grouped" },
   { id: "inventory", label: "📦 Inventory" },
   { id: "import", label: "📥 Import" },
@@ -16,7 +18,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 export function App() {
-  const [tab, setTab] = useState<Tab>("grouped");
+  const [tab, setTab] = useState<Tab>("board");
   const [toast, setToast] = useState<string | null>(null);
   // Bumped to tell tabs to refetch after an import.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -44,6 +46,7 @@ export function App() {
         ))}
       </nav>
 
+      {tab === "board" && <OrderBoard key={`board-${refreshKey}`} showToast={showToast} />}
       {tab === "grouped" && <Grouped key={`grouped-${refreshKey}`} showToast={showToast} />}
       {tab === "inventory" && <Inventory key={`inv-${refreshKey}`} showToast={showToast} />}
       {tab === "import" && (
