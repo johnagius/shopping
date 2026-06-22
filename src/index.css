@@ -37,11 +37,8 @@ body {
 }
 
 header.top {
-  position: sticky;
-  top: 0;
-  background: linear-gradient(var(--bg) 70%, transparent);
-  padding: 20px 0 12px;
-  z-index: 5;
+  background: var(--bg);
+  padding: 16px 0 8px;
 }
 
 header.top h1 {
@@ -58,13 +55,16 @@ header.top p {
 
 nav.tabs {
   display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 6px;
+  row-gap: 6px;
   position: sticky;
   top: 0;
   background: var(--bg);
-  padding: 10px 0;
-  z-index: 6;
-  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+  margin-bottom: 4px;
+  z-index: 10;
 }
 
 nav.tabs button {
@@ -72,9 +72,9 @@ nav.tabs button {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--muted);
-  padding: 9px 14px;
+  padding: 8px 12px;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
