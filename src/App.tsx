@@ -5,11 +5,13 @@ import { Insights } from "./components/Insights";
 import { Inventory } from "./components/Inventory";
 import { Grouped } from "./components/Grouped";
 import { OrderBoard } from "./components/OrderBoard";
+import { WebMap } from "./components/WebMap";
 
-type Tab = "board" | "grouped" | "import" | "history" | "insights" | "inventory";
+type Tab = "board" | "web" | "grouped" | "import" | "history" | "insights" | "inventory";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "board", label: "🛒 Order" },
+  { id: "web", label: "🕸️ Web" },
   { id: "grouped", label: "🗂️ Grouped" },
   { id: "inventory", label: "📦 Inventory" },
   { id: "import", label: "📥 Import" },
@@ -47,6 +49,7 @@ export function App() {
       </nav>
 
       {tab === "board" && <OrderBoard key={`board-${refreshKey}`} showToast={showToast} />}
+      {tab === "web" && <WebMap key={`web-${refreshKey}`} showToast={showToast} />}
       {tab === "grouped" && <Grouped key={`grouped-${refreshKey}`} showToast={showToast} />}
       {tab === "inventory" && <Inventory key={`inv-${refreshKey}`} showToast={showToast} />}
       {tab === "import" && (

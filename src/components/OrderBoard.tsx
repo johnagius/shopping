@@ -80,6 +80,20 @@ export function OrderBoard({ showToast }: { showToast: (m: string) => void }) {
     }
   };
 
+  const editShort = async (e: React.MouseEvent, it: CatalogItem) => {
+    e.stopPropagation();
+    const v = window.prompt(`Short / generic name for "${it.name}"`, it.short_name ?? "");
+    if (v === null) return;
+    const val = v.trim();
+    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, short_name: val || null } : x)));
+    try {
+      await api.updateCatalogItem(it.id, { short_name: val });
+      showToast(val ? "Short name saved" : "Short name cleared");
+    } catch (err) {
+      showToast((err as Error).message);
+    }
+  };
+
   const reset = async () => {
     if (marked.size === 0) return;
     if (!window.confirm(`Reset ${marked.size} marked item${marked.size === 1 ? "" : "s"}?`)) return;
@@ -196,13 +210,32 @@ export function OrderBoard({ showToast }: { showToast: (m: string) => void }) {
                           {it.last_price != null ? `€${it.last_price.toFixed(2)}` : ""}
                         </span>
                       )}
-                      {it.short_name && (
+                      {it.short_name ? (
+                        <span style={{ display: "flex", gap: 4, marginTop: 4, alignSelf: "stretch" }}>
+                          <span
+                            className="chip-short"
+                            style={{ flex: 1, marginTop: 0 }}
+                            title={`Copy generic: ${it.short_name}`}
+                            onClick={(e) => copyShort(e, it)}
+                          >
+                            ⧉ {it.short_name}
+                          </span>
+                          <span
+                            className="chip-short"
+                            style={{ flex: "0 0 auto", marginTop: 0 }}
+                            title="Edit short name"
+                            onClick={(e) => editShort(e, it)}
+                          >
+                            ✎
+                          </span>
+                        </span>
+                      ) : (
                         <span
                           className="chip-short"
-                          title={`Copy generic: ${it.short_name}`}
-                          onClick={(e) => copyShort(e, it)}
+                          title="Add short name"
+                          onClick={(e) => editShort(e, it)}
                         >
-                          ⧉ {it.short_name}
+                          + short
                         </span>
                       )}
                     </button>

@@ -36,6 +36,19 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
     void load();
   }, [load]);
 
+  const editShort = async (it: CatalogItem) => {
+    const v = window.prompt(`Short / generic name for "${it.name}"`, it.short_name ?? "");
+    if (v === null) return;
+    const val = v.trim();
+    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, short_name: val || null } : x)));
+    try {
+      await api.updateCatalogItem(it.id, { short_name: val });
+      showToast(val ? "Short name saved" : "Short name cleared");
+    } catch (e) {
+      showToast((e as Error).message);
+    }
+  };
+
   const toggleStar = async (it: CatalogItem) => {
     const next = it.is_cheapest ? 0 : 1;
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, is_cheapest: next } : x)));
@@ -173,6 +186,13 @@ export function Grouped({ showToast }: { showToast: (m: string) => void }) {
                             ⧉ generic
                           </button>
                         )}
+                        <button
+                          className="icon"
+                          title={it.short_name ? "Edit short name" : "Add short name"}
+                          onClick={() => editShort(it)}
+                        >
+                          ✎
+                        </button>
                         <button
                           className="icon"
                           title="Copy name"
