@@ -1,0 +1,19 @@
+name = "shopping"
+main = "worker/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static frontend (Vite build output) served by the Worker.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# D1 database. database_id is injected by CI on first deploy
+# (see .github/workflows/deploy.yml) so the repo never hardcodes account-
+# specific ids. For local dev, wrangler creates a local replica automatically.
+[[d1_databases]]
+binding = "DB"
+database_name = "shopping"
+database_id = "PLACEHOLDER_DATABASE_ID"
+migrations_dir = "migrations"
