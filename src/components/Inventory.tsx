@@ -4,6 +4,24 @@ import { useCategories, ADD_CATEGORY_VALUE } from "../lib/useCategories";
 import { TIERS, TIER_LABELS, tierOrder } from "../lib/tiers";
 import type { CatalogItem } from "../lib/types";
 
+type SortKey = "added" | "name" | "tier" | "aisle" | "price" | "used";
+
+function fmtShort(iso: string): string {
+  const d = new Date(iso.replace(" ", "T") + (iso.includes("Z") ? "" : "Z"));
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+async function copyText(text: string, showToast: (m: string) => void) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Copied");
+  } catch {
+    showToast("Couldn't copy");
+  }
+}
+
 function InventoryRow({
   item,
   categories,
@@ -25,6 +43,7 @@ function InventoryRow({
   const [category, setCategory] = useState(item.category ?? "Other");
   const [tier, setTier] = useState(item.tier ?? "One off");
   const [price, setPrice] = useState(item.last_price != null ? String(item.last_price) : "");
+  const [star, setStar] = useState(!!item.is_cheapest);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const orig = useRef({ name: item.name, price });
@@ -72,6 +91,18 @@ function InventoryRow({
         style={{ width: 20, height: 20, fontSize: 12, flex: "0 0 auto" }}
       >
         {selected ? "✓" : ""}
+      </button>
+      <button
+        className="icon"
+        title={star ? "Cheapest — unstar" : "Mark as cheapest"}
+        onClick={() => {
+          const v = !star;
+          setStar(v);
+          void save({ is_cheapest: v });
+        }}
+        style={{ color: star ? "#f0b429" : "var(--muted)", fontSize: 16, padding: 2, flex: "0 0 auto" }}
+      >
+        {star ? "★" : "☆"}
       </button>
       <input
         value={name}
@@ -125,8 +156,8 @@ function InventoryRow({
         {category && !categories.includes(category) && <option value={category}>{category}</option>}
         <option value={ADD_CATEGORY_VALUE}>➕ Add aisle…</option>
       </select>
-      <div style={{ position: "relative", flex: "0 0 60px" }}>
-        <span style={{ position: "absolute", left: 5, top: 7, color: "var(--muted)", fontSize: 12 }}>€</span>
+      <div style={{ position: "relative", flex: "0 0 56px" }}>
+        <span style={{ position: "absolute", left: 4, top: 7, color: "var(--muted)", fontSize: 12 }}>€</span>
         <input
           value={price}
           inputMode="decimal"
@@ -137,11 +168,20 @@ function InventoryRow({
               void save({ last_price: price === "" ? null : Number(price) });
             }
           }}
-          style={{ padding: "6px 2px 6px 15px", fontSize: 13 }}
+          style={{ padding: "6px 2px 6px 14px", fontSize: 13 }}
         />
       </div>
-      <span style={{ flex: "0 0 12px", color: "var(--accent)", fontSize: 13 }}>{saved ? "✓" : ""}</span>
-      <button className="icon" onClick={del} disabled={busy} aria-label="delete" style={{ padding: 4 }}>
+      <span className="muted" style={{ flex: "0 0 auto", fontSize: 11 }} title="times ordered">
+        ×{item.order_count}
+      </span>
+      <span className="muted" style={{ flex: "0 0 auto", fontSize: 11 }} title="added">
+        {fmtShort(item.created_at)}
+      </span>
+      <span style={{ flex: "0 0 10px", color: "var(--accent)", fontSize: 12 }}>{saved ? "✓" : ""}</span>
+      <button className="icon" title="Copy name" onClick={() => copyText(item.name, showToast)} style={{ padding: 3 }}>
+        ⧉
+      </button>
+      <button className="icon" onClick={del} disabled={busy} aria-label="delete" style={{ padding: 3 }}>
         ✕
       </button>
     </div>
@@ -154,6 +194,8 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
   const [q, setQ] = useState("");
   const [tierFilter, setTierFilter] = useState<string>("all");
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [sortKey, setSortKey] = useState<SortKey>("added");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const { categories, addNew } = useCategories();
 
   const load = useCallback(async () => {
@@ -166,6 +208,10 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
     }
   }, []);
 
+  useEffect(() => {
+    void load();
+  }, [load]);
+
   const toggleSelect = (id: number) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -173,17 +219,36 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
       return next;
     });
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const sortBy = (key: SortKey) => {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir(key === "added" || key === "used" ? "desc" : "asc");
+    }
+  };
+
+  const cmp = (a: CatalogItem, b: CatalogItem): number => {
+    switch (sortKey) {
+      case "name":
+        return a.name.localeCompare(b.name);
+      case "tier":
+        return tierOrder(a.tier) - tierOrder(b.tier);
+      case "aisle":
+        return (a.category ?? "").localeCompare(b.category ?? "");
+      case "price":
+        return (a.last_price ?? -1) - (b.last_price ?? -1);
+      case "used":
+        return a.order_count - b.order_count;
+      case "added":
+      default:
+        return a.created_at.localeCompare(b.created_at);
+    }
+  };
 
   const filtered = items
     .filter((i) => i.name.toLowerCase().includes(q.trim().toLowerCase()))
     .filter((i) => tierFilter === "all" || (i.tier ?? "One off") === tierFilter)
-    .sort(
-      (a, b) =>
-        tierOrder(a.tier) - tierOrder(b.tier) || a.name.localeCompare(b.name),
-    );
+    .sort((a, b) => (sortDir === "asc" ? cmp(a, b) : -cmp(a, b)));
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
   const toggleSelectAll = () =>
@@ -197,11 +262,30 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
   const bulkDelete = async () => {
     const ids = [...selected];
     if (ids.length === 0) return;
-    if (!window.confirm(`Delete ${ids.length} item${ids.length === 1 ? "" : "s"} from inventory?`)) return;
+    if (!window.confirm(`Delete ${ids.length} item${ids.length === 1 ? "" : "s"}?`)) return;
     const { deleted } = await api.bulkDeleteCatalog(ids);
-    showToast(`Deleted ${deleted} item${deleted === 1 ? "" : "s"}`);
+    showToast(`Deleted ${deleted}`);
     await load();
   };
+
+  const bulkSet = async (patch: { category?: string; tier?: string }) => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    await api.bulkUpdateCatalog(ids, patch);
+    showToast(`Updated ${ids.length}`);
+    await load();
+  };
+
+  const Header = ({ k, label }: { k: SortKey; label: string }) => (
+    <button
+      className={`tag ${sortKey === k ? "ok" : ""}`}
+      style={{ cursor: "pointer" }}
+      onClick={() => sortBy(k)}
+    >
+      {label}
+      {sortKey === k ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+    </button>
+  );
 
   return (
     <div>
@@ -211,13 +295,10 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
             Inventory ({items.length})
           </h2>
         </div>
-        <p className="muted" style={{ fontSize: 12, margin: "4px 0 8px" }}>
-          Set each item's <strong>tier</strong> (Essential / Nice to have / One-off) and aisle.
-          Edits save automatically. Use <strong>Quick add</strong> on the List to pull these into an
-          order.
-        </p>
         <input placeholder="Search inventory…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+
+        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="muted" style={{ fontSize: 11 }}>Tier:</span>
           {["all", ...TIERS].map((t) => (
             <button
               key={t}
@@ -229,16 +310,53 @@ export function Inventory({ showToast }: { showToast: (m: string) => void }) {
             </button>
           ))}
         </div>
+
+        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="muted" style={{ fontSize: 11 }}>Sort:</span>
+          <Header k="added" label="Added" />
+          <Header k="name" label="Name" />
+          <Header k="tier" label="Tier" />
+          <Header k="aisle" label="Aisle" />
+          <Header k="price" label="Price" />
+          <Header k="used" label="Used" />
+        </div>
+
         {filtered.length > 0 && (
-          <div className="row" style={{ marginTop: 10, gap: 8 }}>
+          <div className="row" style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
             <button className="btn secondary" onClick={toggleSelectAll}>
               {allFilteredSelected ? "Deselect all" : `Select all (${filtered.length})`}
             </button>
-            <div className="spacer" />
             {selected.size > 0 && (
-              <button className="btn danger" onClick={bulkDelete}>
-                Delete {selected.size} selected
-              </button>
+              <>
+                <select
+                  value=""
+                  onChange={(e) => e.target.value && bulkSet({ tier: e.target.value })}
+                  style={{ width: "auto", padding: "8px", fontSize: 13 }}
+                >
+                  <option value="">Set tier… ({selected.size})</option>
+                  {TIERS.map((t) => (
+                    <option key={t} value={t}>
+                      {TIER_LABELS[t]}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value=""
+                  onChange={(e) => e.target.value && bulkSet({ category: e.target.value })}
+                  style={{ width: "auto", padding: "8px", fontSize: 13 }}
+                >
+                  <option value="">Set aisle… ({selected.size})</option>
+                  {categories.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+                <div className="spacer" />
+                <button className="btn danger" onClick={bulkDelete}>
+                  Delete {selected.size}
+                </button>
+              </>
             )}
           </div>
         )}

@@ -6,6 +6,7 @@ export interface CatalogItem {
   norm_name: string;
   category: string | null;
   tier: string | null;
+  is_cheapest: number; // 0 | 1 — starred as cheapest place to buy
   last_price: number | null;
   last_shop: string | null;
   last_ordered_at: string | null;

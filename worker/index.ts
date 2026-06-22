@@ -225,6 +225,7 @@ api.patch("/catalog/:id", async (c) => {
     category?: string;
     last_price?: number | null;
     tier?: string;
+    is_cheapest?: boolean;
   }>();
 
   const existing = await db
@@ -252,6 +253,10 @@ api.patch("/catalog/:id", async (c) => {
   if (body.tier !== undefined) {
     sets.push("tier = ?");
     vals.push(body.tier);
+  }
+  if (body.is_cheapest !== undefined) {
+    sets.push("is_cheapest = ?");
+    vals.push(body.is_cheapest ? 1 : 0);
   }
   if (sets.length === 0) return c.json({ ok: true });
   sets.push("updated_at = datetime('now')");
@@ -290,6 +295,31 @@ api.post("/catalog/bulk-delete", async (c) => {
     .bind(...list)
     .run();
   return c.json({ deleted: list.length });
+});
+
+api.post("/catalog/bulk-update", async (c) => {
+  const db = c.env.DB;
+  const { ids, category, tier } = await c.req.json<{
+    ids: number[];
+    category?: string;
+    tier?: string;
+  }>();
+  const list = (ids ?? []).filter((n) => Number.isFinite(n));
+  if (list.length === 0) return c.json({ updated: 0 });
+  const ph = list.map(() => "?").join(",");
+  if (category !== undefined) {
+    await db
+      .prepare(`UPDATE catalog_items SET category = ?, updated_at = datetime('now') WHERE id IN (${ph})`)
+      .bind(category, ...list)
+      .run();
+  }
+  if (tier !== undefined) {
+    await db
+      .prepare(`UPDATE catalog_items SET tier = ?, updated_at = datetime('now') WHERE id IN (${ph})`)
+      .bind(tier, ...list)
+      .run();
+  }
+  return c.json({ updated: list.length });
 });
 
 // ---- Categories (aisles) ----

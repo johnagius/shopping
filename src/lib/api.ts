@@ -6,7 +6,6 @@ import type {
   ParsedOrder,
   RestockItem,
   ShoppingListItem,
-  WhereToBuyResponse,
 } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -51,7 +50,13 @@ export const api = {
     req<CatalogItem[]>(`/catalog${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   updateCatalogItem: (
     id: number,
-    patch: { name?: string; category?: string; last_price?: number | null; tier?: string },
+    patch: {
+      name?: string;
+      category?: string;
+      last_price?: number | null;
+      tier?: string;
+      is_cheapest?: boolean;
+    },
   ) => req<{ ok: true }>(`/catalog/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCatalogItem: (id: number) =>
     req<{ ok: true }>(`/catalog/${id}`, { method: "DELETE" }),
@@ -59,6 +64,11 @@ export const api = {
     req<{ deleted: number }>("/catalog/bulk-delete", {
       method: "POST",
       body: JSON.stringify({ ids }),
+    }),
+  bulkUpdateCatalog: (ids: number[], patch: { category?: string; tier?: string }) =>
+    req<{ updated: number }>("/catalog/bulk-update", {
+      method: "POST",
+      body: JSON.stringify({ ids, ...patch }),
     }),
 
   // Orders
@@ -76,9 +86,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(order),
     }),
-
-  // Where to buy (import-based shop matcher)
-  whereToBuy: () => req<WhereToBuyResponse>("/where-to-buy"),
 
   // Suggestions ("you usually buy these")
   getSuggestions: () => req<CatalogItem[]>("/suggestions"),

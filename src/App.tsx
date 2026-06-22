@@ -2,18 +2,18 @@ import { useState, useCallback } from "react";
 import { ShoppingList } from "./components/ShoppingList";
 import { ImportReceipt } from "./components/ImportReceipt";
 import { OrderHistory } from "./components/OrderHistory";
-import { WhereToBuy } from "./components/WhereToBuy";
 import { Insights } from "./components/Insights";
 import { Inventory } from "./components/Inventory";
+import { Grouped } from "./components/Grouped";
 
-type Tab = "list" | "import" | "history" | "shops" | "insights" | "inventory";
+type Tab = "list" | "grouped" | "import" | "history" | "insights" | "inventory";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "list", label: "🛒 List" },
+  { id: "grouped", label: "🗂️ Grouped" },
+  { id: "inventory", label: "📦 Inventory" },
   { id: "import", label: "📥 Import" },
   { id: "history", label: "🧾 Orders" },
-  { id: "inventory", label: "📦 Inventory" },
-  { id: "shops", label: "📍 Where to buy" },
   { id: "insights", label: "📊 Insights" },
 ];
 
@@ -90,8 +90,8 @@ export function App() {
           }}
         />
       )}
+      {tab === "grouped" && <Grouped key={`grouped-${refreshKey}`} showToast={showToast} />}
       {tab === "inventory" && <Inventory key={`inv-${refreshKey}`} showToast={showToast} />}
-      {tab === "shops" && <WhereToBuy key={`shops-${refreshKey}`} />}
       {tab === "insights" && <Insights key={`insights-${refreshKey}`} />}
 
       {toast && <div className="toast">{toast}</div>}
