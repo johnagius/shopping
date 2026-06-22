@@ -1,23 +1,52 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { api } from "../lib/api";
 import { useCategories } from "../lib/useCategories";
 import type { CatalogItem } from "../lib/types";
 
-function trunc(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+/** Greedily wrap into up to 2 lines of ~maxChars; ellipsize overflow. */
+function wrapLabel(name: string, maxChars: number): string[] {
+  const words = name.split(/\s+/);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    if (!cur) cur = w;
+    else if ((cur + " " + w).length <= maxChars) cur += " " + w;
+    else {
+      lines.push(cur);
+      cur = w;
+      if (lines.length === 1) break;
+    }
+  }
+  if (lines.length < 2 && cur) lines.push(cur);
+  // leftover words beyond 2 lines: append + ellipsis on the 2nd
+  const used = lines.join(" ").length;
+  if (used < name.length) {
+    let second = lines[1] ?? "";
+    if (second.length > maxChars - 1) second = second.slice(0, maxChars - 1);
+    lines[1] = (second + "…").trim();
+  }
+  return lines.slice(0, 2);
 }
 
-type Node = { item: CatalogItem; x: number; y: number; w: number; label: string };
-type AisleNode = { cat: string; x: number; y: number; w: number };
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-const charW = 6.6;
-const pillW = (s: string) => Math.min(220, Math.max(46, s.length * charW + 20));
+type Node = {
+  item: CatalogItem;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  lines: string[];
+};
+type AisleNode = { cat: string; x: number; y: number; w: number; h: number };
 
 export function WebMap({ showToast }: { showToast: (m: string) => void }) {
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [marked, setMarked] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [openCat, setOpenCat] = useState<string | null>(null); // null = show all categories
+  const [openCat, setOpenCat] = useState<string | null>(null);
+  const [size, setSize] = useState({ w: 900, h: 620 });
+  const wrapRef = useRef<HTMLDivElement>(null);
   const { orderOf } = useCategories();
 
   const load = useCallback(async () => {
@@ -34,6 +63,18 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Measure the canvas so the layout is aware of the real space available.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setSize({ w: Math.round(r.width), h: Math.round(r.height) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [loading]);
 
   const tap = async (it: CatalogItem) => {
     const willMark = !marked.has(it.id);
@@ -64,6 +105,7 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
   };
 
   const layout = useMemo(() => {
+    const { w, h } = size;
     const groups = new Map<string, CatalogItem[]>();
     for (const it of items) {
       const cat = it.category ?? "Other";
@@ -71,86 +113,80 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
     }
     const ordered = [...groups.entries()].sort((a, b) => orderOf(a[0]) - orderOf(b[0]));
 
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    const grow = (x: number, y: number, hw: number, hh: number) => {
-      minX = Math.min(minX, x - hw);
-      minY = Math.min(minY, y - hh);
-      maxX = Math.max(maxX, x + hw);
-      maxY = Math.max(maxY, y + hh);
+    // Pill sizing helpers given a font size.
+    const sizePill = (lines: string[], font: number) => {
+      const ch = font * 0.6;
+      const longest = Math.max(1, ...lines.map((l) => l.length));
+      return { w: longest * ch + font * 1.4, h: lines.length * (font * 1.25) + font * 0.9 };
     };
 
     if (openCat === null) {
-      // Collapsed: hub + all category nodes on a ring.
+      // Collapsed: hub + category ring, sized to the canvas.
       const A = ordered.length || 1;
-      const R = 200;
+      const R = Math.min(w, h) * 0.38;
+      const font = clamp(Math.sqrt((w * h) / Math.max(8, A)) * 0.16, 12, 26);
+      const cx = w / 2;
+      const cy = h / 2;
       const aisles: AisleNode[] = ordered.map(([cat], i) => {
         const ang = -Math.PI / 2 + (2 * Math.PI * i) / A;
-        return { cat, x: Math.cos(ang) * R, y: Math.sin(ang) * R, w: pillW(cat) };
+        const lines = [cat];
+        const p = sizePill(lines, font);
+        return { cat, x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, w: p.w, h: p.h };
       });
-      grow(0, 0, 30, 30);
-      for (const a of aisles) grow(a.x, a.y, a.w / 2, 14);
-      const M = 36;
-      return {
-        mode: "collapsed" as const,
-        aisles,
-        anchor: null,
-        nodes: [] as Node[],
-        view: { x: minX - M, y: minY - M, w: maxX - minX + 2 * M, h: maxY - minY + 2 * M },
-      };
+      return { mode: "collapsed" as const, aisles, nodes: [] as Node[], anchor: null, font, hub: { cx, cy } };
     }
 
-    // Expanded: the chosen category docks bottom-left; its items fan out as a
-    // web of concentric arcs sweeping up-and-right.
+    // Expanded: bottom-left category + items filling the rectangle.
     const list = (groups.get(openCat) ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
-    const n = list.length;
+    const n = list.length || 1;
+    const pad = 26;
+    const area = (w - 2 * pad) * (h - 2 * pad) * 0.82;
+    const cell = Math.sqrt(area / n);
+    const font = clamp(cell * 0.3, 9, 30);
+    const maxChars = clamp(Math.round(cell / (font * 0.6)), 8, 22);
 
-    const A0 = (8 * Math.PI) / 180; // near the rightward axis
-    const A1 = (82 * Math.PI) / 180; // near straight up
-    const SPACING = 230;
-    const r0 = 200;
-    const dr = 150;
-
-    const nodes: Node[] = [];
+    // Normalised quarter-fan coords in [0,1], then stretch to the box.
+    const A0 = (6 * Math.PI) / 180;
+    const A1 = (84 * Math.PI) / 180;
+    const r0n = 0.16;
+    const drn = 0.13;
+    const SPn = 0.16; // normalised chord spacing
+    const raw: { fx: number; fy: number; it: CatalogItem }[] = [];
     let placed = 0;
     let ring = 0;
     while (placed < n) {
-      const r = r0 + ring * dr;
-      const cap = Math.max(1, Math.floor(((A1 - A0) * r) / SPACING));
+      const r = r0n + ring * drn;
+      const cap = Math.max(1, Math.floor(((A1 - A0) * r) / SPn));
       const take = Math.min(cap, n - placed);
       for (let j = 0; j < take; j++) {
         const a = take === 1 ? (A0 + A1) / 2 : A0 + ((A1 - A0) * j) / (take - 1);
-        const it = list[placed + j];
-        const label = trunc(it.short_name || it.name, 24);
-        nodes.push({
-          item: it,
-          x: r * Math.cos(a),
-          y: -r * Math.sin(a), // up in SVG's y-down space
-          w: pillW(label),
-          label,
-        });
+        raw.push({ fx: r * Math.cos(a), fy: r * Math.sin(a), it: list[placed + j] });
       }
       placed += take;
       ring++;
     }
+    // Normalise to [0,1] then map to the box (anchor at bottom-left).
+    const maxF = Math.max(...raw.map((p) => Math.max(p.fx, p.fy)), 0.001);
+    const nodes: Node[] = raw.map(({ fx, fy, it }) => {
+      const lines = wrapLabel(it.short_name || it.name, maxChars);
+      const p = sizePill(lines, font);
+      return {
+        item: it,
+        x: pad + (fx / maxF) * (w - 2 * pad),
+        y: h - pad - (fy / maxF) * (h - 2 * pad),
+        w: p.w,
+        h: p.h,
+        lines,
+      };
+    });
+    const ap = sizePill([openCat], clamp(font * 1.05, 11, 26));
+    const anchor: AisleNode = { cat: openCat, x: pad + ap.w / 2, y: h - pad - ap.h / 2, w: ap.w, h: ap.h };
 
-    const anchor: AisleNode = { cat: openCat, x: 0, y: 0, w: pillW(openCat) };
+    return { mode: "expanded" as const, aisles: [] as AisleNode[], nodes, anchor, font, hub: { cx: 0, cy: 0 } };
+  }, [items, orderOf, openCat, size]);
 
-    for (const nd of nodes) grow(nd.x, nd.y, nd.w / 2, 13);
-    grow(anchor.x, anchor.y, anchor.w / 2, 16);
-    const M = 40;
-    return {
-      mode: "expanded" as const,
-      aisles: [] as AisleNode[],
-      anchor,
-      nodes,
-      view: { x: minX - M, y: minY - M, w: maxX - minX + 2 * M, h: maxY - minY + 2 * M },
-    };
-  }, [items, orderOf, openCat]);
-
-  const { mode, aisles, anchor, nodes, view } = layout;
+  const { mode, aisles, nodes, anchor, font, hub } = layout;
+  const anchorFont = clamp(font * 1.05, 11, 26);
 
   return (
     <div>
@@ -176,129 +212,88 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
         <div className="empty">Nothing yet. Import an order to fill the web.</div>
       ) : (
         <div
+          ref={wrapRef}
           style={{
             overflow: "hidden",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
             background: "var(--surface)",
+            height: "82vh",
           }}
         >
           <svg
-            viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
-            preserveAspectRatio="xMidYMid meet"
-            style={{ display: "block", width: "100%", height: "82vh" }}
+            viewBox={`0 0 ${size.w} ${size.h}`}
+            width={size.w}
+            height={size.h}
+            style={{ display: "block" }}
           >
             {mode === "collapsed" ? (
               <>
                 {aisles.map((a) => (
-                  <line
-                    key={`l-${a.cat}`}
-                    x1={0}
-                    y1={0}
-                    x2={a.x}
-                    y2={a.y}
-                    stroke="var(--accent-dim)"
-                    strokeWidth={2}
-                  />
+                  <line key={`l-${a.cat}`} x1={hub.cx} y1={hub.cy} x2={a.x} y2={a.y} stroke="var(--accent-dim)" strokeWidth={2} />
                 ))}
-                <circle cx={0} cy={0} r={28} fill="var(--accent)" />
-                <text x={0} y={4} textAnchor="middle" fontSize={12} fontWeight={800} fill="#06231a">
+                <circle cx={hub.cx} cy={hub.cy} r={font * 1.6} fill="var(--accent)" />
+                <text x={hub.cx} y={hub.cy + font * 0.35} textAnchor="middle" fontSize={font} fontWeight={800} fill="#06231a">
                   Items
                 </text>
                 {aisles.map((a) => (
-                  <g
-                    key={`a-${a.cat}`}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => setOpenCat(a.cat)}
-                  >
-                    <rect
-                      x={a.x - a.w / 2}
-                      y={a.y - 14}
-                      width={a.w}
-                      height={28}
-                      rx={14}
-                      fill="var(--surface-2)"
-                      stroke="var(--muted)"
-                    />
-                    <text
-                      x={a.x}
-                      y={a.y + 4}
-                      textAnchor="middle"
-                      fontSize={11}
-                      fontWeight={800}
-                      fill="var(--text)"
-                    >
-                      {trunc(a.cat, 18)}
+                  <g key={`a-${a.cat}`} style={{ cursor: "pointer" }} onClick={() => setOpenCat(a.cat)}>
+                    <rect x={a.x - a.w / 2} y={a.y - a.h / 2} width={a.w} height={a.h} rx={a.h / 2} fill="var(--surface-2)" stroke="var(--muted)" />
+                    <text x={a.x} y={a.y + font * 0.35} textAnchor="middle" fontSize={font} fontWeight={800} fill="var(--text)">
+                      {a.cat}
                     </text>
                   </g>
                 ))}
               </>
             ) : (
               <>
-                {/* lines from the docked category to every item */}
                 {anchor &&
                   nodes.map((nd) => (
-                    <line
-                      key={`l-${nd.item.id}`}
-                      x1={anchor.x}
-                      y1={anchor.y}
-                      x2={nd.x}
-                      y2={nd.y}
-                      stroke="var(--border)"
-                      strokeWidth={1.5}
-                    />
+                    <line key={`l-${nd.item.id}`} x1={anchor.x} y1={anchor.y} x2={nd.x} y2={nd.y} stroke="var(--border)" strokeWidth={1.5} />
                   ))}
 
-                {/* item nodes */}
                 {nodes.map((nd) => {
                   const on = marked.has(nd.item.id);
                   return (
                     <g key={nd.item.id} style={{ cursor: "pointer" }} onClick={() => tap(nd.item)}>
                       <rect
                         x={nd.x - nd.w / 2}
-                        y={nd.y - 13}
+                        y={nd.y - nd.h / 2}
                         width={nd.w}
-                        height={26}
-                        rx={13}
+                        height={nd.h}
+                        rx={Math.min(16, nd.h / 2)}
                         fill={on ? "var(--accent-dim)" : "var(--surface-2)"}
                         stroke={on ? "var(--accent)" : "var(--border)"}
                       />
-                      <text
-                        x={nd.x}
-                        y={nd.y + 4}
-                        textAnchor="middle"
-                        fontSize={12}
-                        fontWeight={600}
-                        fill={on ? "#fff" : "var(--text)"}
-                      >
-                        {nd.item.is_cheapest ? "★ " : ""}
-                        {nd.label}
+                      <text textAnchor="middle" fontSize={font} fontWeight={600} fill={on ? "#fff" : "var(--text)"}>
+                        {nd.lines.map((ln, li) => (
+                          <tspan
+                            key={li}
+                            x={nd.x}
+                            y={nd.y - nd.h / 2 + font * 1.15 + li * font * 1.25}
+                          >
+                            {li === 0 && nd.item.is_cheapest ? "★ " : ""}
+                            {ln}
+                          </tspan>
+                        ))}
                       </text>
                     </g>
                   );
                 })}
 
-                {/* docked category (bottom-left) = tap to go back */}
                 {anchor && (
                   <g style={{ cursor: "pointer" }} onClick={() => setOpenCat(null)}>
                     <rect
                       x={anchor.x - anchor.w / 2}
-                      y={anchor.y - 16}
+                      y={anchor.y - anchor.h / 2}
                       width={anchor.w}
-                      height={32}
-                      rx={16}
+                      height={anchor.h}
+                      rx={anchor.h / 2}
                       fill="var(--accent)"
                       stroke="var(--accent)"
                     />
-                    <text
-                      x={anchor.x}
-                      y={anchor.y + 4}
-                      textAnchor="middle"
-                      fontSize={12}
-                      fontWeight={800}
-                      fill="#06231a"
-                    >
-                      {trunc(anchor.cat, 20)} ✕
+                    <text x={anchor.x} y={anchor.y + anchorFont * 0.35} textAnchor="middle" fontSize={anchorFont} fontWeight={800} fill="#06231a">
+                      {anchor.cat} ✕
                     </text>
                   </g>
                 )}
