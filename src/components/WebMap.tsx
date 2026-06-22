@@ -8,13 +8,16 @@ function trunc(s: string, n: number): string {
 }
 
 type Node = { item: CatalogItem; x: number; y: number; w: number; label: string };
-type Branch = { cat: string; ax: number; ay: number; aw: number; nodes: Node[] };
+type AisleNode = { cat: string; x: number; y: number; w: number };
+
+const charW = 6.6;
+const pillW = (s: string) => Math.min(220, Math.max(46, s.length * charW + 20));
 
 export function WebMap({ showToast }: { showToast: (m: string) => void }) {
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [marked, setMarked] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [openCat, setOpenCat] = useState<string | null>(null); // null = all collapsed
+  const [openCat, setOpenCat] = useState<string | null>(null); // null = show all categories
   const { orderOf } = useCategories();
 
   const load = useCallback(async () => {
@@ -60,83 +63,82 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
     showToast("Web reset");
   };
 
-  // Radial layout. Only the open category's items are laid out (collapsed by default).
-  const { branches, view } = useMemo(() => {
+  const layout = useMemo(() => {
     const groups = new Map<string, CatalogItem[]>();
     for (const it of items) {
       const cat = it.category ?? "Other";
       groups.set(cat, [...(groups.get(cat) ?? []), it]);
     }
     const ordered = [...groups.entries()].sort((a, b) => orderOf(a[0]) - orderOf(b[0]));
-    const A = ordered.length || 1;
 
-    const cx = 0;
-    const cy = 0;
-    const R_AISLE = 200;
-    const charW = 6.6;
-    const pillW = (s: string) => Math.min(200, Math.max(46, s.length * charW + 18));
-
-    const br: Branch[] = ordered.map(([cat, list], i) => {
-      const ang = -Math.PI / 2 + (2 * Math.PI * i) / A;
-      const ux = Math.cos(ang);
-      const uy = Math.sin(ang);
-      const px = -uy;
-      const py = ux;
-      const ax = cx + ux * R_AISLE;
-      const ay = cy + uy * R_AISLE;
-
-      let nodes: Node[] = [];
-      if (cat === openCat) {
-        const sorted = list.slice().sort((a, b) => a.name.localeCompare(b.name));
-        const cols = Math.min(sorted.length, 3) || 1;
-        const COL = 150;
-        const ROW = 56;
-        nodes = sorted.map((it, k) => {
-          const col = k % cols;
-          const row = Math.floor(k / cols);
-          const along = 80 + row * ROW;
-          const across = (col - (cols - 1) / 2) * COL;
-          const label = trunc(it.short_name || it.name, 22);
-          return {
-            item: it,
-            x: ax + ux * along + px * across,
-            y: ay + uy * along + py * across,
-            w: pillW(label),
-            label,
-          };
-        });
-      }
-      return { cat, ax, ay, aw: pillW(cat), nodes };
-    });
-
-    // Bounding box over visible elements (hub + aisle nodes + open items).
-    let minX = cx - 30;
-    let minY = cy - 30;
-    let maxX = cx + 30;
-    let maxY = cy + 30;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
     const grow = (x: number, y: number, hw: number, hh: number) => {
       minX = Math.min(minX, x - hw);
       minY = Math.min(minY, y - hh);
       maxX = Math.max(maxX, x + hw);
       maxY = Math.max(maxY, y + hh);
     };
-    for (const b of br) {
-      grow(b.ax, b.ay, b.aw / 2, 13);
-      for (const n of b.nodes) grow(n.x, n.y, n.w / 2, 12);
+
+    if (openCat === null) {
+      // Collapsed: hub + all category nodes on a ring.
+      const A = ordered.length || 1;
+      const R = 200;
+      const aisles: AisleNode[] = ordered.map(([cat], i) => {
+        const ang = -Math.PI / 2 + (2 * Math.PI * i) / A;
+        return { cat, x: Math.cos(ang) * R, y: Math.sin(ang) * R, w: pillW(cat) };
+      });
+      grow(0, 0, 30, 30);
+      for (const a of aisles) grow(a.x, a.y, a.w / 2, 14);
+      const M = 36;
+      return {
+        mode: "collapsed" as const,
+        aisles,
+        anchor: null,
+        nodes: [] as Node[],
+        view: { x: minX - M, y: minY - M, w: maxX - minX + 2 * M, h: maxY - minY + 2 * M },
+      };
     }
+
+    // Expanded: the chosen category docks bottom-left; its items fan across the rest.
+    const list = (groups.get(openCat) ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
+    const n = list.length || 1;
+    const cols = Math.max(1, Math.ceil(Math.sqrt(n * 1.6)));
+    const CW = 180;
+    const CH = 64;
+    const nodes: Node[] = list.map((it, k) => {
+      const col = k % cols;
+      const row = Math.floor(k / cols);
+      const label = trunc(it.short_name || it.name, 24);
+      return { item: it, x: col * CW, y: row * CH, w: pillW(label), label };
+    });
+    const rows = Math.ceil(n / cols);
+    const anchor: AisleNode = { cat: openCat, x: -10, y: (rows - 1) * CH + 110, w: pillW(openCat) };
+
+    for (const nd of nodes) grow(nd.x, nd.y, nd.w / 2, 12);
+    grow(anchor.x, anchor.y, anchor.w / 2, 16);
     const M = 36;
     return {
-      branches: br,
+      mode: "expanded" as const,
+      aisles: [] as AisleNode[],
+      anchor,
+      nodes,
       view: { x: minX - M, y: minY - M, w: maxX - minX + 2 * M, h: maxY - minY + 2 * M },
     };
   }, [items, orderOf, openCat]);
+
+  const { mode, aisles, anchor, nodes, view } = layout;
 
   return (
     <div>
       <div className="card">
         <div className="row">
           <span className="muted" style={{ fontSize: 12 }}>
-            Tap a category to open it. Tap an item to copy its name and mark it added (green).
+            {mode === "collapsed"
+              ? "Tap a category to open it."
+              : "Tap an item to copy + mark it. Tap the category (bottom-left) to go back."}
           </span>
           <div className="spacer" />
           {marked.size > 0 && (
@@ -154,7 +156,6 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
       ) : (
         <div
           style={{
-            position: "relative",
             overflow: "hidden",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
@@ -164,130 +165,125 @@ export function WebMap({ showToast }: { showToast: (m: string) => void }) {
           <svg
             viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
             preserveAspectRatio="xMidYMid meet"
-            style={{ display: "block", width: "100%", height: "78vh" }}
+            style={{ display: "block", width: "100%", height: "80vh" }}
           >
-            {/* hub -> aisle spokes, and aisle -> item lines for the open category */}
-            {branches.map((b) => (
-              <g key={`l-${b.cat}`}>
-                <line
-                  x1={0}
-                  y1={0}
-                  x2={b.ax}
-                  y2={b.ay}
-                  stroke={b.cat === openCat ? "var(--accent)" : "var(--accent-dim)"}
-                  strokeWidth={2}
-                />
-                {b.nodes.map((n) => (
+            {mode === "collapsed" ? (
+              <>
+                {aisles.map((a) => (
                   <line
-                    key={`bl-${n.item.id}`}
-                    x1={b.ax}
-                    y1={b.ay}
-                    x2={n.x}
-                    y2={n.y}
-                    stroke="var(--border)"
-                    strokeWidth={1.5}
+                    key={`l-${a.cat}`}
+                    x1={0}
+                    y1={0}
+                    x2={a.x}
+                    y2={a.y}
+                    stroke="var(--accent-dim)"
+                    strokeWidth={2}
                   />
                 ))}
-              </g>
-            ))}
-
-            {/* center hub (tap to collapse all) */}
-            <g style={{ cursor: "pointer" }} onClick={() => setOpenCat(null)}>
-              <circle cx={0} cy={0} r={28} fill="var(--accent)" />
-              <text x={0} y={4} textAnchor="middle" fontSize={12} fontWeight={800} fill="#06231a">
-                Items
-              </text>
-            </g>
-
-            {/* aisle nodes (tap to open/close) */}
-            {branches.map((b) => {
-              const active = b.cat === openCat;
-              return (
-                <g
-                  key={`a-${b.cat}`}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => setOpenCat(active ? null : b.cat)}
-                >
-                  <rect
-                    x={b.ax - b.aw / 2}
-                    y={b.ay - 14}
-                    width={b.aw}
-                    height={28}
-                    rx={14}
-                    fill={active ? "var(--accent-dim)" : "var(--surface-2)"}
-                    stroke={active ? "var(--accent)" : "var(--muted)"}
-                  />
-                  <text
-                    x={b.ax}
-                    y={b.ay + 4}
-                    textAnchor="middle"
-                    fontSize={11}
-                    fontWeight={800}
-                    fill={active ? "#fff" : "var(--text)"}
+                <circle cx={0} cy={0} r={28} fill="var(--accent)" />
+                <text x={0} y={4} textAnchor="middle" fontSize={12} fontWeight={800} fill="#06231a">
+                  Items
+                </text>
+                {aisles.map((a) => (
+                  <g
+                    key={`a-${a.cat}`}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setOpenCat(a.cat)}
                   >
-                    {trunc(b.cat, 18)}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* item nodes (only for the open category) */}
-            {branches.map((b) =>
-              b.nodes.map((n) => {
-                const on = marked.has(n.item.id);
-                return (
-                  <g key={n.item.id} style={{ cursor: "pointer" }} onClick={() => tap(n.item)}>
                     <rect
-                      x={n.x - n.w / 2}
-                      y={n.y - 12}
-                      width={n.w}
-                      height={24}
-                      rx={12}
-                      fill={on ? "var(--accent-dim)" : "var(--surface-2)"}
-                      stroke={on ? "var(--accent)" : "var(--border)"}
+                      x={a.x - a.w / 2}
+                      y={a.y - 14}
+                      width={a.w}
+                      height={28}
+                      rx={14}
+                      fill="var(--surface-2)"
+                      stroke="var(--muted)"
                     />
                     <text
-                      x={n.x}
-                      y={n.y + 4}
+                      x={a.x}
+                      y={a.y + 4}
                       textAnchor="middle"
                       fontSize={11}
-                      fontWeight={600}
-                      fill={on ? "#fff" : "var(--text)"}
+                      fontWeight={800}
+                      fill="var(--text)"
                     >
-                      {n.item.is_cheapest ? "★ " : ""}
-                      {n.label}
+                      {trunc(a.cat, 18)}
                     </text>
                   </g>
-                );
-              }),
+                ))}
+              </>
+            ) : (
+              <>
+                {/* lines from the docked category to every item */}
+                {anchor &&
+                  nodes.map((nd) => (
+                    <line
+                      key={`l-${nd.item.id}`}
+                      x1={anchor.x}
+                      y1={anchor.y}
+                      x2={nd.x}
+                      y2={nd.y}
+                      stroke="var(--border)"
+                      strokeWidth={1.5}
+                    />
+                  ))}
+
+                {/* item nodes */}
+                {nodes.map((nd) => {
+                  const on = marked.has(nd.item.id);
+                  return (
+                    <g key={nd.item.id} style={{ cursor: "pointer" }} onClick={() => tap(nd.item)}>
+                      <rect
+                        x={nd.x - nd.w / 2}
+                        y={nd.y - 13}
+                        width={nd.w}
+                        height={26}
+                        rx={13}
+                        fill={on ? "var(--accent-dim)" : "var(--surface-2)"}
+                        stroke={on ? "var(--accent)" : "var(--border)"}
+                      />
+                      <text
+                        x={nd.x}
+                        y={nd.y + 4}
+                        textAnchor="middle"
+                        fontSize={12}
+                        fontWeight={600}
+                        fill={on ? "#fff" : "var(--text)"}
+                      >
+                        {nd.item.is_cheapest ? "★ " : ""}
+                        {nd.label}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* docked category (bottom-left) = tap to go back */}
+                {anchor && (
+                  <g style={{ cursor: "pointer" }} onClick={() => setOpenCat(null)}>
+                    <rect
+                      x={anchor.x - anchor.w / 2}
+                      y={anchor.y - 16}
+                      width={anchor.w}
+                      height={32}
+                      rx={16}
+                      fill="var(--accent)"
+                      stroke="var(--accent)"
+                    />
+                    <text
+                      x={anchor.x}
+                      y={anchor.y + 4}
+                      textAnchor="middle"
+                      fontSize={12}
+                      fontWeight={800}
+                      fill="#06231a"
+                    >
+                      {trunc(anchor.cat, 20)} ✕
+                    </text>
+                  </g>
+                )}
+              </>
             )}
           </svg>
-
-          {/* bottom-left collapse chip for the open category */}
-          {openCat && (
-            <button
-              onClick={() => setOpenCat(null)}
-              style={{
-                position: "absolute",
-                left: 12,
-                bottom: 12,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                background: "var(--accent-dim)",
-                border: "1px solid var(--accent)",
-                color: "#fff",
-                borderRadius: 999,
-                padding: "8px 14px",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: "pointer",
-                boxShadow: "0 6px 20px rgba(0,0,0,0.4)",
-              }}
-            >
-              {openCat} ✕
-            </button>
-          )}
         </div>
       )}
     </div>
