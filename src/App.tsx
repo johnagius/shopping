@@ -1,15 +1,13 @@
 import { useState, useCallback } from "react";
-import { ShoppingList } from "./components/ShoppingList";
 import { ImportReceipt } from "./components/ImportReceipt";
 import { OrderHistory } from "./components/OrderHistory";
 import { Insights } from "./components/Insights";
 import { Inventory } from "./components/Inventory";
 import { Grouped } from "./components/Grouped";
 
-type Tab = "list" | "grouped" | "import" | "history" | "insights" | "inventory";
+type Tab = "grouped" | "import" | "history" | "insights" | "inventory";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "list", label: "🛒 List" },
   { id: "grouped", label: "🗂️ Grouped" },
   { id: "inventory", label: "📦 Inventory" },
   { id: "import", label: "📥 Import" },
@@ -18,80 +16,46 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 export function App() {
-  const [tab, setTab] = useState<Tab>("list");
+  const [tab, setTab] = useState<Tab>("grouped");
   const [toast, setToast] = useState<string | null>(null);
-  // Text handed to the Import tab when a receipt is pasted somewhere else.
-  const [importSeed, setImportSeed] = useState("");
-  // Bumped to tell the list/finder to refetch after an import or reorder.
+  // Bumped to tell tabs to refetch after an import.
   const [refreshKey, setRefreshKey] = useState(0);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     window.clearTimeout((showToast as unknown as { t?: number }).t);
-    (showToast as unknown as { t?: number }).t = window.setTimeout(
-      () => setToast(null),
-      2600,
-    );
+    (showToast as unknown as { t?: number }).t = window.setTimeout(() => setToast(null), 2600);
   }, []);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
-
-  const goToList = useCallback(() => setTab("list"), []);
-
-  // Called when a Wolt receipt is pasted into the wrong place (e.g. the add box).
-  const startImport = useCallback((text: string) => {
-    setImportSeed(text);
-    setTab("import");
-  }, []);
 
   return (
     <div className="app">
       <header className="top">
         <h1>House &amp; Shopping</h1>
-        <p>Your list, your past orders, one tap to reorder.</p>
+        <p>Your inventory, grouped by aisle — copy into Wolt.</p>
       </header>
 
       <nav className="tabs">
         {TABS.map((t) => (
-          <button
-            key={t.id}
-            className={t.id === tab ? "active" : ""}
-            onClick={() => setTab(t.id)}
-          >
+          <button key={t.id} className={t.id === tab ? "active" : ""} onClick={() => setTab(t.id)}>
             {t.label}
           </button>
         ))}
       </nav>
 
-      {tab === "list" && (
-        <ShoppingList
-          key={`list-${refreshKey}`}
-          showToast={showToast}
-          onPasteReceipt={startImport}
-        />
-      )}
+      {tab === "grouped" && <Grouped key={`grouped-${refreshKey}`} showToast={showToast} />}
+      {tab === "inventory" && <Inventory key={`inv-${refreshKey}`} showToast={showToast} />}
       {tab === "import" && (
         <ImportReceipt
           showToast={showToast}
-          initialText={importSeed}
           onImported={() => {
-            setImportSeed("");
             refresh();
-            setTab("history");
+            setTab("inventory");
           }}
         />
       )}
-      {tab === "history" && (
-        <OrderHistory
-          showToast={showToast}
-          onReordered={() => {
-            refresh();
-            goToList();
-          }}
-        />
-      )}
-      {tab === "grouped" && <Grouped key={`grouped-${refreshKey}`} showToast={showToast} />}
-      {tab === "inventory" && <Inventory key={`inv-${refreshKey}`} showToast={showToast} />}
+      {tab === "history" && <OrderHistory key={`hist-${refreshKey}`} showToast={showToast} />}
       {tab === "insights" && <Insights key={`insights-${refreshKey}`} />}
 
       {toast && <div className="toast">{toast}</div>}

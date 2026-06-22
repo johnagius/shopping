@@ -13,13 +13,16 @@ function fmtDate(o: Order & { item_count?: number }): string {
 
 type LineEdit = { id: number; name: string; quantity: number; unit_price: string };
 
-export function OrderHistory({
-  showToast,
-  onReordered,
-}: {
-  showToast: (m: string) => void;
-  onReordered: () => void;
-}) {
+async function copyText(text: string, showToast: (m: string) => void, label: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(label);
+  } catch {
+    showToast("Couldn't copy");
+  }
+}
+
+export function OrderHistory({ showToast }: { showToast: (m: string) => void }) {
   const [orders, setOrders] = useState<(Order & { item_count: number })[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<number | null>(null);
@@ -54,15 +57,10 @@ export function OrderHistory({
     if (!detail[id]) await loadDetail(id);
   };
 
-  const reorderAll = async (o: Order) => {
-    const res = await api.reorder(o.id);
-    showToast(`Added ${res.added} items to your list`);
-    onReordered();
-  };
-
-  const reorderOne = async (it: OrderItem) => {
-    await api.addItemsToList([{ name: it.name, quantity: it.quantity }]);
-    showToast(`Added ${it.name}`);
+  const copyAll = (id: number) => {
+    const names = (detail[id] ?? []).filter((i) => !i.is_fee).map((i) => i.name);
+    if (names.length === 0) return;
+    copyText(names.join("\n"), showToast, `Copied ${names.length} items`);
   };
 
   const deleteOrder = async (o: Order & { item_count: number }) => {
@@ -196,8 +194,12 @@ export function OrderHistory({
                     </span>
                     {!it.is_fee && (
                       <>
-                        <button className="icon" title="Add to list" onClick={() => reorderOne(it)}>
-                          ＋
+                        <button
+                          className="icon"
+                          title="Copy name"
+                          onClick={() => copyText(it.name, showToast, "Copied")}
+                        >
+                          ⧉
                         </button>
                         <button
                           className="icon"
@@ -223,8 +225,8 @@ export function OrderHistory({
               )}
 
               <div className="row" style={{ marginTop: 12, gap: 8 }}>
-                <button className="btn" onClick={() => reorderAll(o)}>
-                  Reorder all
+                <button className="btn" onClick={() => copyAll(o.id)}>
+                  ⧉ Copy all
                 </button>
                 <div className="spacer" />
                 <button className="btn danger" disabled={busy === o.id} onClick={() => deleteOrder(o)}>
