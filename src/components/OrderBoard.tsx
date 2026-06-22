@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { api } from "../lib/api";
 import { useCategories } from "../lib/useCategories";
-import { TIERS, TIER_LABELS } from "../lib/tiers";
+import { TIERS, TIER_LABELS, tierColor } from "../lib/tiers";
 import type { CatalogItem, ItemShops } from "../lib/types";
 
 /** Shorten a shop name for the chip badge, e.g. "MySupermarket Qormi" -> "Qormi". */
@@ -198,6 +198,11 @@ export function OrderBoard({ showToast }: { showToast: (m: string) => void }) {
                       key={it.id}
                       className={`chip ${marked.has(it.id) ? "added" : ""}`}
                       onClick={() => tap(it)}
+                      style={
+                        marked.has(it.id)
+                          ? undefined
+                          : { borderLeft: `3px solid ${tierColor(it.tier)}` }
+                      }
                     >
                       <span>
                         {it.is_cheapest ? <span className="star">★ </span> : ""}

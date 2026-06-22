@@ -9,7 +9,22 @@
   --accent-dim: #0b7d5a;
   --danger: #e5534b;
   --radius: 12px;
+  --tier-essential: #19c37d;
+  --tier-nice: #5aa9ff;
+  --tier-oneoff: #8b93a3;
+  --gold: #f0b429;
+  --shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-fast: 140ms;
+  --t: 300ms;
   color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 * {
@@ -77,6 +92,20 @@ nav.tabs button {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+nav.tabs button:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+nav.tabs button:active {
+  transform: scale(0.96);
 }
 
 nav.tabs button.active {
@@ -91,6 +120,7 @@ nav.tabs button.active {
   border-radius: var(--radius);
   padding: 14px;
   margin: 12px 0;
+  box-shadow: var(--shadow);
 }
 
 .row {
@@ -132,6 +162,25 @@ button.btn {
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    transform var(--t-fast) var(--ease),
+    filter var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+button.btn:hover {
+  filter: brightness(1.07);
+}
+
+button.btn:active {
+  transform: scale(0.96);
+}
+
+button.btn:focus-visible,
+nav.tabs button:focus-visible,
+.tag:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 button.btn.secondary {
@@ -249,6 +298,15 @@ button:disabled {
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--muted);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.tag:active {
+  transform: scale(0.95);
 }
 
 .tag.warn {
@@ -309,6 +367,36 @@ a {
   font-size: 14px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
   z-index: 20;
+  animation: toast-in 220ms var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+/* Web map nodes */
+.web-node {
+  transition: transform var(--t) var(--ease);
+  animation: node-in 260ms var(--ease) both;
+}
+.web-node.dragging {
+  transition: none;
+  cursor: grabbing;
+}
+@keyframes node-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* Order board chips */

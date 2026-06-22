@@ -849,6 +849,40 @@ api.post("/board-state/reset", async (c) => {
   return c.json({ cleared: res.meta.changes ?? 0 });
 });
 
+// ---- Personalised Web layout: remembered node positions (normalised) ----
+
+api.get("/node-positions", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT catalog_id, nx, ny FROM node_positions",
+  ).all<{ catalog_id: number; nx: number; ny: number }>();
+  return c.json(results);
+});
+
+api.put("/node-positions/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  const { nx, ny } = await c.req.json<{ nx: number; ny: number }>();
+  if (!Number.isFinite(id) || !Number.isFinite(nx) || !Number.isFinite(ny))
+    return c.json({ error: "bad input" }, 400);
+  await c.env.DB.prepare(
+    `INSERT INTO node_positions (catalog_id, nx, ny) VALUES (?, ?, ?)
+     ON CONFLICT(catalog_id) DO UPDATE SET nx = excluded.nx, ny = excluded.ny, updated_at = datetime('now')`,
+  )
+    .bind(id, nx, ny)
+    .run();
+  return c.json({ ok: true });
+});
+
+api.post("/node-positions/clear", async (c) => {
+  const { ids } = await c.req.json<{ ids: number[] }>();
+  const list = (ids ?? []).filter((n) => Number.isFinite(n));
+  if (list.length === 0) return c.json({ cleared: 0 });
+  const ph = list.map(() => "?").join(",");
+  const res = await c.env.DB.prepare(`DELETE FROM node_positions WHERE catalog_id IN (${ph})`)
+    .bind(...list)
+    .run();
+  return c.json({ cleared: res.meta.changes ?? 0 });
+});
+
 // ---- App wiring: /api/* -> Hono, everything else -> static assets ----
 
 const app = new Hono<{ Bindings: Env }>();

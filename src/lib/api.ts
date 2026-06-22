@@ -122,6 +122,20 @@ export const api = {
     }),
   resetBoard: () => req<{ cleared: number }>("/board-state/reset", { method: "POST" }),
 
+  // Personalised web layout (normalised positions)
+  getNodePositions: () =>
+    req<{ catalog_id: number; nx: number; ny: number }[]>("/node-positions"),
+  saveNodePosition: (catalogId: number, nx: number, ny: number) =>
+    req<{ ok: true }>(`/node-positions/${catalogId}`, {
+      method: "PUT",
+      body: JSON.stringify({ nx, ny }),
+    }),
+  clearNodePositions: (ids: number[]) =>
+    req<{ cleared: number }>("/node-positions/clear", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+
   // Categories (aisles)
   getCategories: () => req<Category[]>("/categories"),
   addCategory: (name: string) =>

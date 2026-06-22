@@ -9,6 +9,16 @@ export const TIER_LABELS: Record<string, string> = {
   "One off": "One-offs",
 };
 
+export const TIER_COLORS: Record<string, string> = {
+  Essential: "var(--tier-essential)",
+  "Nice to have": "var(--tier-nice)",
+  "One off": "var(--tier-oneoff)",
+};
+
+export function tierColor(tier: string | null | undefined): string {
+  return TIER_COLORS[tier ?? "One off"] ?? "var(--tier-oneoff)";
+}
+
 export function tierOrder(tier: string | null | undefined): number {
   const i = TIERS.indexOf((tier ?? "One off") as Tier);
   return i === -1 ? TIERS.length : i;
